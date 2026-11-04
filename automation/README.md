@@ -1,9 +1,10 @@
 # Course publishing support
 
 This folder contains the publisher, least-privilege database policy, and offline
-tests. The publisher needs a dedicated Supabase Auth account with explicit rows
-in course_publishers, and GitHub Actions secrets COURSE_PUBLISHER_EMAIL and
-COURSE_PUBLISHER_PASSWORD. Never use an owner account or Supabase service key.
+tests. The publisher uses GitHub Actions secrets COURSE_PUBLISHER_EMAIL and
+COURSE_PUBLISHER_PASSWORD. A restricted publisher account is recommended; an
+existing course-owner account can also be used if its broader access is accepted.
+Never use a Supabase service key.
 
 Each build is uploaded into content-addressed objects. The manifest is replaced
 only after every file uploads, preserving the current release if an upload fails.

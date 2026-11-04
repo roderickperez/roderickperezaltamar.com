@@ -6,9 +6,9 @@ if [[ ! -t 0 ]]; then
   exit 1
 fi
 command -v gh >/dev/null || { printf '%s\n' 'GitHub CLI is required.' >&2; exit 1; }
-printf 'Dedicated Supabase publisher email: '
+printf 'Website owner email: '
 IFS= read -r publisher_email
-printf 'Dedicated Supabase publisher password (hidden): '
+printf 'Website owner password (hidden): '
 IFS= read -r -s publisher_password
 printf '\n'
 if [[ -z "$publisher_email" || -z "$publisher_password" ]]; then
