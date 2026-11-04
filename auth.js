@@ -36,6 +36,20 @@
       if (version !== checkVersion) return;
       if (owner.error || grant.error) throw new Error("Access check failed");
       if (!owner.data && !grant.data) return panelText("Access not yet granted", "Your account does not have access to this course. Contact the course owner for an invitation.");
+      if (course === "python-renewable") {
+        panelText("Python Renewable Course", "This existing course is currently hosted on a public website. The course itself can be opened without signing in; private hosting is not configured yet.");
+        const link = document.createElement("a");
+        link.href = "https://roderickperez.github.io/EAGE_PythonRenewableEnergyCourse/sandbox/";
+        link.target = "_blank"; link.rel = "noopener noreferrer"; link.className = "auth-action";
+        link.textContent = "Open course in a new tab ↗";
+        const frame = document.createElement("iframe");
+        frame.src = link.href;
+        frame.title = "Python Renewable Energy interactive course";
+        frame.loading = "lazy";
+        frame.style.cssText = "display:block;width:100%;height:80vh;min-height:600px;border:1px solid #d4dcdf;margin-top:24px;background:white";
+        panel.append(link, frame);
+        return;
+      }
       const { data, error } = await client.from("course_lessons").select("title, body, position").eq("course_id", course).order("position");
       if (version !== checkVersion) return;
       if (error) throw error;
