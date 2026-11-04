@@ -3,7 +3,7 @@
   const field = document.querySelector('[data-seismic-field]');
   if (!field) return;
   const motion = matchMedia('(prefers-reduced-motion: reduce)');
-  let motionOptIn = false;
+  let motionOptIn = true;
   const motionAllowed = () => !motion.matches || motionOptIn;
   try {
     const THREE = await import('https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js');
@@ -18,8 +18,8 @@
     camera.position.set(0, 9, 13);
     camera.lookAt(0, 0, 0);
     const lines = [];
-    const rows = 62, points = 190;
-    const sizeX = 25, sizeZ = 17;
+    const rows = 86, points = 190;
+    const sizeX = 25, sizeZ = 25;
     for (let row = 0; row < rows; row++) {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(points * 3), 3));
@@ -82,7 +82,9 @@
     }
 
     function pointOnField(clientX, clientY) {
-      const point = new THREE.Vector2(clientX / window.innerWidth * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+      const rect = field.getBoundingClientRect();
+      if (clientX < rect.left || clientX > rect.right || clientY < rect.top || clientY > rect.bottom) return null;
+      const point = new THREE.Vector2((clientX - rect.left) / rect.width * 2 - 1, -(clientY - rect.top) / rect.height * 2 + 1);
       raycaster.setFromCamera(point, camera);
       const hit = new THREE.Vector3();
       return raycaster.ray.intersectPlane(plane, hit) ? {x:hit.x, z:hit.z} : null;
@@ -123,11 +125,14 @@
       }
     });
     new ResizeObserver(() => { resize(); if (!motionAllowed()) draw(); }).observe(field);
-    document.addEventListener('visibilitychange', () => {
-      running = !document.hidden;
+    let inView = true;
+    function syncVisibility() {
+      running = !document.hidden && inView;
       cancelAnimationFrame(frame);
       if (running) draw();
-    });
+    }
+    new IntersectionObserver(entries => { inView = entries[0].isIntersecting; syncVisibility(); }).observe(field);
+    document.addEventListener('visibilitychange', syncVisibility);
     motion.addEventListener('change', () => { cancelAnimationFrame(frame); if (running) draw(); });
     resize();
     draw();
@@ -177,20 +182,29 @@
     document.addEventListener('pointermove', event => {
       if (event.pointerType !== 'mouse' || performance.now() - lastMove < 100) return;
       lastMove = performance.now();
-      pointer = {x:event.clientX, y:event.clientY, time:lastMove};
+      const rect = field.getBoundingClientRect();
+      if (event.clientY < rect.top || event.clientY > rect.bottom) return;
+      pointer = {x:event.clientX - rect.left, y:event.clientY - rect.top, time:lastMove};
       if (!motionAllowed()) paint();
     }, {passive:true});
     document.addEventListener('pointerdown', event => {
       if (event.target.closest('a, button, input, select, textarea, dialog, summary')) return;
+      const rect = field.getBoundingClientRect();
+      if (event.clientY < rect.top || event.clientY > rect.bottom) return;
       const resume = !motionAllowed();
       motionOptIn = true;
-      source = {x:event.clientX, y:event.clientY};
+      source = {x:event.clientX - rect.left, y:event.clientY - rect.top};
       if (resume && visible) { cancelAnimationFrame(frame); paint(); }
     });
     new ResizeObserver(() => { resizeFallback(); if (!motionAllowed()) paint(); }).observe(field);
-    document.addEventListener('visibilitychange', () => {
-      visible = !document.hidden; cancelAnimationFrame(frame); if (visible) paint();
-    });
+    let inView = true;
+    function syncVisibility() {
+      visible = !document.hidden && inView;
+      cancelAnimationFrame(frame);
+      if (visible) paint();
+    }
+    new IntersectionObserver(entries => { inView = entries[0].isIntersecting; syncVisibility(); }).observe(field);
+    document.addEventListener('visibilitychange', syncVisibility);
     motion.addEventListener('change', () => { cancelAnimationFrame(frame); if (visible) paint(); });
     resizeFallback(); paint();
   }
