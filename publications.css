@@ -1,0 +1,23 @@
+/* Publication list */
+.publications{border-top:1px solid var(--line)}
+.publications .sectionhead{align-items:end}
+.publications-intro{max-width:380px}
+.scholar-link{display:inline-block;color:#263f54;border-bottom:1px solid #a3b3b8;font-size:13px;font-weight:700;padding:9px 0;margin-top:10px}
+.publication-list{border-top:1px solid var(--line)}
+.publication{display:grid;grid-template-columns:76px 1fr 32px;gap:20px;align-items:baseline;padding:21px 3px;border-bottom:1px solid var(--line);transition:background .2s}
+.publication:hover{background:#f6f9f8}
+.publication-year{font-size:12px;color:#77888a;font-variant-numeric:tabular-nums}
+.publication-title{font-family:'Space Grotesk',sans-serif;font-size:clamp(16px,1.45vw,19px);line-height:1.4;letter-spacing:-.025em;font-weight:500}
+.publication-arrow{font-size:16px;color:#52746d;text-align:right}
+.publications-more summary{display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:700;color:#263f54;list-style:none;margin-top:25px;padding:8px 0;border-bottom:1px solid #a3b3b8}
+.publications-more summary::-webkit-details-marker{display:none}
+.publications-more summary:after{content:'↓';transition:transform .2s}
+.publications-more[open] summary:after{transform:rotate(180deg)}
+.publications-more .publication-list{margin-top:20px}
+@media(max-width:700px){.publication{grid-template-columns:48px 1fr 20px;gap:12px;padding:18px 0}.publications-intro{margin-top:16px}}
+@media(max-width:520px){header{height:auto;min-height:72px;gap:16px;padding:16px 0;align-items:flex-start}nav{flex-wrap:wrap;justify-content:flex-end;gap:12px 15px}}
+
+
+.publications-more .hide-publications{display:none}
+.publications-more[open] .show-publications{display:none}
+.publications-more[open] .hide-publications{display:inline}

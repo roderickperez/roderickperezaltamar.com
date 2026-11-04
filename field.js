@@ -30,6 +30,7 @@
     const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
     const pulses = [];
     let frame = 0, running = true;
+    let source = null, lastSourcePulse = 0, lastMovePulse = 0;
 
     function resize() {
       const width = field.clientWidth, height = field.clientHeight;
@@ -42,6 +43,11 @@
 
     function draw(time = performance.now()) {
       const t = motion.matches ? 0 : time / 1000;
+      if (source && !motion.matches && t - lastSourcePulse >= 1.25) {
+        pulses.push({x:source.x, z:source.z, time:t, strength:0.55});
+        lastSourcePulse = t;
+        if (pulses.length > 10) pulses.shift();
+      }
       for (let p = pulses.length - 1; p >= 0; p--) {
         if (!motion.matches && t - pulses[p].time > 5) pulses.splice(p, 1);
       }
@@ -55,7 +61,7 @@
             const age = motion.matches ? .55 : Math.max(0, t - pulse.time);
             const distance = Math.hypot(x - pulse.x, z - pulse.z);
             const front = distance - age * 2.7;
-            y += .55 * Math.exp(-front * front / .38) * Math.cos(front * 7) * Math.exp(-age * .38);
+            y += pulse.strength * Math.exp(-front * front / .38) * Math.cos(front * 7) * Math.exp(-age * .38);
           }
           positions[i * 3] = x;
           positions[i * 3 + 1] = y;
@@ -67,22 +73,39 @@
       if (running && !motion.matches) frame = requestAnimationFrame(draw);
     }
 
-    function sendPulse(clientX, clientY) {
+    function pointOnField(clientX, clientY) {
       const point = new THREE.Vector2(clientX / window.innerWidth * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
       raycaster.setFromCamera(point, camera);
       const hit = new THREE.Vector3();
-      if (!raycaster.ray.intersectPlane(plane, hit)) return;
-      pulses.push({x:hit.x, z:hit.z, time:performance.now() / 1000});
-      if (pulses.length > 5) pulses.shift();
+      return raycaster.ray.intersectPlane(plane, hit) ? {x:hit.x, z:hit.z} : null;
+    }
+    function addPulse(point, strength) {
+      if (!point) return;
+      pulses.push({...point, time:performance.now() / 1000, strength});
+      if (pulses.length > 10) pulses.shift();
       if (motion.matches) draw();
     }
+    document.addEventListener('pointermove', event => {
+      if (event.pointerType !== 'mouse' || motion.matches) return;
+      const now = performance.now();
+      if (now - lastMovePulse < 160) return;
+      lastMovePulse = now;
+      addPulse(pointOnField(event.clientX, event.clientY), .22);
+    }, {passive:true});
     document.addEventListener('pointerdown', event => {
       if (event.target.closest('a, button, input, select, textarea, dialog, summary')) return;
-      sendPulse(event.clientX, event.clientY);
+      const point = pointOnField(event.clientX, event.clientY);
+      if (!point) return;
+      source = point;
+      lastSourcePulse = performance.now() / 1000;
+      addPulse(point, .7);
     });
     document.addEventListener('keydown', event => {
       if ((event.key === 'Enter' || event.key === ' ') && (event.target === document.body || event.target === document.documentElement)) {
-        sendPulse(window.innerWidth / 2, window.innerHeight / 2);
+        const point = pointOnField(window.innerWidth / 2, window.innerHeight / 2);
+        source = point;
+        lastSourcePulse = performance.now() / 1000;
+        addPulse(point, .7);
       }
     });
     new ResizeObserver(() => { resize(); if (motion.matches) draw(); }).observe(field);
