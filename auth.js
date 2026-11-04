@@ -57,6 +57,7 @@
     document.querySelector("#signed-in").hidden = !currentUser;
     document.querySelector("#signed-email").textContent = currentUser ? `Signed in as ${currentUser.email || "your account"}.` : "";
     loginButton.textContent = currentUser ? "Account ↗" : "Sign in ↗";
+    document.querySelector("#auth-title").textContent = currentUser ? "Your account." : "Sign in.";
     const status = document.querySelector("#course-status");
     if (status) status.textContent = currentUser ? "Open a course to check your access." : "Sign in to access courses you have been invited to.";
     void loadCourse(currentUser);
@@ -68,7 +69,7 @@
     message.textContent = "Signing in…";
     const { error } = await client.auth.signInWithPassword({ email: document.querySelector("#email").value.trim(), password: document.querySelector("#password").value });
     message.textContent = error ? "Could not sign in. Check your email and password, or request an invitation." : "Signed in.";
-    if (!error) document.querySelector("#password").value = "";
+    if (!error) { document.querySelector("#password").value = ""; if (dialog.open) dialog.close(); }
   });
   google.addEventListener("click", async () => {
     if (!client) return;
@@ -78,7 +79,7 @@
   document.querySelector("#set-password-form").addEventListener("submit", async event => {
     event.preventDefault(); if (!client || !currentUser) return;
     const { error } = await client.auth.updateUser({ password: document.querySelector("#new-password").value });
-    message.textContent = error ? "Could not save your password. Please try again." : "Password saved.";
+    message.textContent = error ? "Could not change your password. Choose a different new password and try again." : "Password updated.";
     if (!error) document.querySelector("#new-password").value = "";
   });
   document.querySelector("#sign-out").addEventListener("click", async () => {
