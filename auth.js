@@ -36,37 +36,63 @@
       if (version !== checkVersion) return;
       if (owner.error || grant.error) throw new Error("Access check failed");
       if (!owner.data && !grant.data) return panelText("Access not yet granted", "Your account does not have access to this course. Contact the course owner for an invitation.");
-      if (course === "python-renewable") {
-        panelText("Opening the course", "Taking you to the full-page course…");
-        window.location.replace("https://roderickperez.github.io/EAGE_PythonRenewableEnergyCourse/sandbox/");
-        return;
-      }
-      const privatePreviews = {
-        "fault-segmentation": { url: "https://codespaces.new/roderickperez/EAGE_faultSegmentation?ref=main&quickstart=1", port: "8770", path: "/sandbox/" },
-        "energy-decision-ai": { url: "https://codespaces.new/roderickperez/EAGE_DecisionAnalysis_AI?quickstart=1", port: "8788", path: "/" }
-      };
-      if (privatePreviews[course]) {
-        if (!owner.data) return panelText("Course hosting is being set up", "This course is not available to invited learners yet.");
-        const preview = privatePreviews[course];
-        panelText("Open your private course", `This owner-only preview runs in GitHub Codespaces. Create or resume the Codespace, then open port ${preview.port} and visit ${preview.path}. Keep port visibility Private. Codespaces usage may incur charges beyond your allowance.`);
-        const link = document.createElement("a");
-        link.href = preview.url; link.className = "auth-action";
-        link.textContent = "Open private course ↗";
-        panel.append(link);
-        return;
-      }
-      if (course === "eage-python-course") {
-        return panelText("Course is being prepared", "This course is not connected to a hosted version yet.");
-      }
-      const { data, error } = await client.from("course_lessons").select("title, body, position").eq("course_id", course).order("position");
+      const isOwner = !!owner.data;
+      const { data: indexFile, error: indexError } = await client.storage.from("private-courses").download(course + "/index.html");
       if (version !== checkVersion) return;
-      if (error) throw error;
-      if (!data.length) return panelText("You're in", "There are no lessons published for this course yet.");
-      panelText("Course lessons", "Select a lesson below to begin.");
-      for (const lesson of data) {
-        const article = document.createElement("article"), heading = document.createElement("h3"), text = document.createElement("p");
-        article.className = "lesson"; heading.textContent = lesson.title; text.textContent = lesson.body;
-        article.append(heading, text); panel.append(article);
+      if (indexFile && !indexError) {
+        panelText("Course ready", "Open the full-page course. Python runs in your browser using Pyodide.");
+        const open = document.createElement("button");
+        open.type = "button"; open.className = "auth-action"; open.textContent = "Open full-page course ↗";
+        open.addEventListener("click", async () => {
+          open.disabled = true;
+          try {
+            const { data: session } = await client.auth.getSession();
+            if (!session.session) throw new Error("Please sign in again.");
+            const response = await fetch("/api/course-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: session.session.access_token }) });
+            if (!response.ok) throw new Error("Could not start the course session.");
+            window.location.assign("/private-course/" + encodeURIComponent(course) + "/index.html");
+          } catch (_) {
+            panelText("Could not open the course", "Please sign in again, then retry.");
+          }
+        });
+        panel.append(open);
+      } else {
+        panelText("Course not uploaded yet", isOwner ? "Upload the prepared course folder below after private storage is configured." : "This course has not been published yet.");
+        if (course === "python-renewable") {
+          const note = document.createElement("p");
+          note.textContent = "The existing renewable course is still public and is not protected by the course login.";
+          const publicLink = document.createElement("a");
+          publicLink.href = "https://roderickperez.github.io/EAGE_PythonRenewableEnergyCourse/sandbox/";
+          publicLink.className = "auth-action"; publicLink.textContent = "Open existing public course ↗";
+          panel.append(note, publicLink);
+        }
+      }
+      if (isOwner) {
+        const section = document.createElement("section");
+        const help = document.createElement("p");
+        help.textContent = "Owner: select the prepared sandbox folder to upload or update this course. Only the browser course files and generated student assets will be uploaded.";
+        const input = document.createElement("input");
+        input.type = "file"; input.multiple = true; input.setAttribute("webkitdirectory", ""); input.setAttribute("directory", ""); input.setAttribute("aria-label", "Choose prepared course folder");
+        const button = document.createElement("button"); button.type = "button"; button.className = "auth-action"; button.textContent = "Upload selected course";
+        const progress = document.createElement("p"); progress.setAttribute("role", "status");
+        button.addEventListener("click", async () => {
+          const rootFiles = new Set(["index.html", "app.js", "styles.css", "python-worker.js", "eagelogo.jpg", "flag-es.svg", "flag-uk.svg", "explorer-python.js", "explorers.css", "explorers.html", "explorers.js", "decision-lab.css", "decision-lab.html", "decision-lab.js", "guide.html"]);
+          const chosen = [...input.files].map(file => ({file, path: file.webkitRelativePath.split("/").slice(1).join("/")}));
+          const files = chosen.filter(({path}) => (rootFiles.has(path) || path.startsWith("generated/") || path.startsWith("vendor/")) && !/(^|\/)(instructor_private|private|\.git)(\/|$)|test_answer_key|final_project_solution|projectsolution|\.bak$/i.test(path));
+          if (!files.some(x => x.path === "index.html") || !files.some(x => x.path === "generated/course.json")) { progress.textContent = "Choose the built sandbox folder containing index.html and generated/course.json."; return; }
+          button.disabled = true; input.disabled = true;
+          try {
+            for (let i = 0; i < files.length; i++) {
+              const {file, path} = files[i];
+              progress.textContent = `Uploading ${i + 1} of ${files.length}…`;
+              const {error} = await client.storage.from("private-courses").upload(course + "/" + path, file, {upsert: true, cacheControl: "0", contentType: file.type || "application/octet-stream"});
+              if (error) throw error;
+            }
+            progress.textContent = "Upload complete. Refresh this page to open the course.";
+          } catch (_) { progress.textContent = "Upload failed. Check that private storage is configured, then retry."; }
+          finally { button.disabled = false; input.disabled = false; }
+        });
+        section.append(help, input, button, progress); panel.append(section);
       }
     } catch (_) {
       if (version === checkVersion) panelText("Course temporarily unavailable", "We couldn't verify access. Please try again later.");
@@ -106,6 +132,7 @@
   });
   document.querySelector("#sign-out").addEventListener("click", async () => {
     if (!client) return;
+    await fetch("/api/course-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clear: true }) }).catch(() => {});
     const { error } = await client.auth.signOut();
     message.textContent = error ? "Could not sign out. Please try again." : "You are signed out.";
   });
