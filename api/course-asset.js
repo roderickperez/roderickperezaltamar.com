@@ -31,6 +31,13 @@ module.exports = async function (req, res) {
     const types = {html:"text/html; charset=utf-8", js:"text/javascript; charset=utf-8", mjs:"text/javascript; charset=utf-8", css:"text/css; charset=utf-8", json:"application/json; charset=utf-8", svg:"image/svg+xml", jpg:"image/jpeg", jpeg:"image/jpeg", png:"image/png", csv:"text/csv; charset=utf-8", pdf:"application/pdf", wasm:"application/wasm", ipynb:"application/json; charset=utf-8"};
     res.setHeader("Content-Type", types[extension] || response.headers.get("content-type") || "application/octet-stream");
     if (req.method === "HEAD") return res.status(200).end();
-    return res.status(200).send(Buffer.from(await response.arrayBuffer()));
+    let content = Buffer.from(await response.arrayBuffer());
+    if (path === "eage-python-course/app.js") {
+      const source = content.toString("utf8")
+        .replace("const STORAGE = 'eage.sandbox.v2'", "const STORAGE = 'eage.python-course.v2'")
+        .replace("const LAYOUT_STORAGE = 'eage.sandbox.layout'", "const LAYOUT_STORAGE = 'eage.python-course.layout'");
+      content = Buffer.from(source);
+    }
+    return res.status(200).send(content);
   } catch (_) { return res.status(503).end(); }
 };
