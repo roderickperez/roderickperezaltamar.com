@@ -1,0 +1,12 @@
+/* Terminal-inspired typography and a restrained code line. */
+body,button,input,textarea,select{font-family:ui-monospace,'Cascadia Code','SFMono-Regular',Consolas,'Liberation Mono',monospace}
+.brand,h1,h2,h3,.publication-title{font-family:ui-monospace,'Cascadia Code','SFMono-Regular',Consolas,'Liberation Mono',monospace;letter-spacing:-.04em}
+.hero h1{font-size:clamp(40px,6.2vw,78px)}
+.code-note{display:flex;align-items:center;gap:10px;margin-top:21px;min-height:20px;color:#456d67;font-size:12px;letter-spacing:0;white-space:nowrap}
+.code-prompt{color:#829993}
+.code-caret{display:inline-block;height:1em;width:6px;background:#658d84;vertical-align:-.13em;animation:code-blink 1s steps(2,start) infinite}
+@keyframes code-blink{to{visibility:hidden}}
+.seismic-background canvas.neural-overlay{z-index:2}
+@media(max-width:700px){.hero h1{font-size:clamp(39px,9vw,64px)}.code-note{font-size:11px}}
+@media(prefers-reduced-motion:reduce){.code-caret{animation:none}}
+
