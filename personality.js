@@ -2,7 +2,7 @@
 (() => {
   const line = document.querySelector('[data-code-line]');
   if (line) {
-    const phrases = ['from curiosity import insight', '# Apply ReLU to your life', 'signal = listen(earth)', 'model.fit(curiosity)', 'insight = explore(signal)'];
+    const phrases = ['from curiosity import insight', '# Applying ReLU to life', 'signal = listen(earth)', 'model.fit(curiosity)', 'insight = explore(signal)'];
     let phrase = 0, cursor = 0, deleting = false;
     line.textContent = '';
     function type() {
