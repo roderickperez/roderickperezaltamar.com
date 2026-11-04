@@ -67,7 +67,23 @@
     if(points.length>36) points.splice(0,points.length-36);
     if(!raf) raf=requestAnimationFrame(draw);
   },{passive:true});
+  // Show the network briefly on arrival and periodically while the hero is visible.
+  let ambientIndex = 0;
+  function ambientNetwork() {
+    const rect=field.getBoundingClientRect();
+    if (!document.hidden && rect.bottom > 0 && rect.top < innerHeight && width && height) {
+      const locations=[[.67,.34],[.50,.47],[.77,.52]];
+      const [cx,cy]=locations[ambientIndex++ % locations.length];
+      const now=performance.now();
+      const offsets=[[-38,-12],[-12,-32],[17,-21],[40,4],[12,21],[-22,17]];
+      for (const [dx,dy] of offsets) points.push({x:width*cx+dx,y:height*cy+dy,time:now});
+      if (points.length>36) points.splice(0,points.length-36);
+      if (!raf) raf=requestAnimationFrame(draw);
+    }
+    setTimeout(ambientNetwork, 5000);
+  }
   new ResizeObserver(resize).observe(field);
   resize();
+  ambientNetwork();
 })();
 
