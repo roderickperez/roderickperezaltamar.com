@@ -56,6 +56,7 @@
           }
         });
         panel.append(open);
+        if (!new URLSearchParams(window.location.search).has("manage")) open.click();
       } else {
         panelText("Course not uploaded yet", isOwner ? "Upload the prepared course folder below after private storage is configured." : "This course has not been published yet.");
         if (course === "python-renewable") {
