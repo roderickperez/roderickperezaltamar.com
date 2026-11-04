@@ -144,7 +144,11 @@
       const config = await response.json();
       if (!config.url || !config.key || !window.supabase) { panelText("Sign-in is being set up", "Course access will be available once sign-in is configured."); return; }
       client = window.supabase.createClient(config.url, config.key);
-      client.auth.onAuthStateChange((_event, session) => { setTimeout(() => render(session), 0); });
+      client.auth.onAuthStateChange((_event, session) => {
+        setTimeout(() => {
+          if ((currentUser?.id || null) !== (session?.user?.id || null)) render(session);
+        }, 0);
+      });
       const { data, error } = await client.auth.getSession();
       if (error) throw error;
       google.disabled = false; login.disabled = false; message.textContent = "";
