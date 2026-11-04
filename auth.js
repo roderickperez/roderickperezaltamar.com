@@ -75,7 +75,7 @@
         button.addEventListener("click", async () => {
           const rootFiles = new Set(["index.html", "app.js", "styles.css", "python-worker.js", "eagelogo.jpg", "flag-es.svg", "flag-uk.svg", "explorer-python.js", "explorers.css", "explorers.html", "explorers.js", "decision-lab.css", "decision-lab.html", "decision-lab.js", "guide.html"]);
           const chosen = [...input.files].map(file => ({file, path: file.webkitRelativePath.split("/").slice(1).join("/")}));
-          const files = chosen.filter(({path}) => (rootFiles.has(path) || path.startsWith("generated/") || path.startsWith("vendor/")) && !/(^|\/)(instructor_private|private|\.git)(\/|$)|test_answer_key|final_project_solution|projectsolution|\.bak$/i.test(path));
+          const files = chosen.filter(({path}) => (rootFiles.has(path) || path.startsWith("generated/") || (path.startsWith("vendor/") || (course === "omv-python-course" && /^assets\/[^/]+\.(png|jpe?g|svg)$/i.test(path)))) && !/(^|\/)(instructor_private|private|\.git)(\/|$)|test_answer_key|final_project_solution|projectsolution|\.bak$/i.test(path));
           if (!files.some(x => x.path === "index.html") || !files.some(x => x.path === "generated/course.json")) { progress.textContent = "Choose the built sandbox folder containing index.html and generated/course.json."; return; }
           files.sort((a, b) => Number(a.path === "index.html") - Number(b.path === "index.html"));
           button.disabled = true; input.disabled = true;

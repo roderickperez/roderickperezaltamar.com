@@ -4,7 +4,7 @@ module.exports = async function (req, res) {
   if (req.method !== "GET" && req.method !== "HEAD") return res.status(405).end();
   const path = typeof req.query.path === "string" ? req.query.path : "";
   const segments = path.split("/");
-  const courses = ["python-renewable","eage-python-course","fault-segmentation","energy-decision-ai"];
+  const courses = ["python-renewable","eage-python-course","fault-segmentation","energy-decision-ai","omv-python-course"];
   if (!courses.includes(segments[0]) || segments.length < 2 || segments.some(s => !s || s === "." || s === ".." || s.includes("\\") || /[\x00-\x1f]/.test(s))) return res.status(400).end();
   const token = (req.headers.cookie || "").split(";").map(s => s.trim()).find(s => s.startsWith("__Host-course_session="))?.slice("__Host-course_session=".length);
   if (!token || !/^[A-Za-z0-9_.-]+$/.test(token)) return res.status(401).send("Please return to the course page and sign in.");

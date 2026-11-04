@@ -15,7 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-COURSES = {"python-renewable", "eage-python-course", "fault-segmentation", "energy-decision-ai"}
+COURSES = {"python-renewable", "eage-python-course", "fault-segmentation", "energy-decision-ai", "omv-python-course"}
 ROOT_FILES = {
     "index.html", "app.js", "styles.css", "python-worker.js", "eagelogo.jpg",
     "flag-es.svg", "flag-uk.svg", "explorer-python.js", "explorers.css",
@@ -40,7 +40,7 @@ def build_inventory(root):
         relative = file.relative_to(root).as_posix()
         if FORBIDDEN.search(relative):
             continue
-        if relative not in ROOT_FILES and not relative.startswith(("generated/", "vendor/")):
+        if relative not in ROOT_FILES and not relative.startswith(("generated/", "vendor/")) and not (relative.startswith("assets/") and relative.lower().endswith((".png", ".jpg", ".jpeg", ".svg"))):
             continue
         digest = hashlib.sha256(file.read_bytes()).hexdigest()
         entries[relative] = (file, digest)

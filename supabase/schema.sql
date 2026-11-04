@@ -5,12 +5,12 @@ create table public.course_owners (
 );
 create table public.course_access (
   user_id uuid not null references auth.users(id) on delete cascade,
-  course_id text not null check (course_id in ('python-renewable','fault-segmentation','energy-decision-ai','eage-python-course')),
+  course_id text not null check (course_id in ('python-renewable','fault-segmentation','energy-decision-ai','eage-python-course','omv-python-course')),
   primary key (user_id, course_id)
 );
 create table public.course_lessons (
   id bigint generated always as identity primary key,
-  course_id text not null check (course_id in ('python-renewable','fault-segmentation','energy-decision-ai','eage-python-course')),
+  course_id text not null check (course_id in ('python-renewable','fault-segmentation','energy-decision-ai','eage-python-course','omv-python-course')),
   position integer not null,
   title text not null,
   body text not null default '',
