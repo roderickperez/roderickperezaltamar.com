@@ -3,7 +3,7 @@
   const field = document.querySelector('[data-seismic-field]');
   const line = document.querySelector('[data-code-line]');
   if (line) {
-    const phrases = ['from curiosity import insight', 'signal = listen(earth)', 'model.fit(curiosity)', 'insight = explore(signal)', '# Apply ReLU to life'];
+    const phrases = ['from curiosity import insight', '# Apply ReLU to life', 'signal = listen(earth)', 'model.fit(curiosity)', 'insight = explore(signal)'];
     let phrase = 0, cursor = 0, deleting = false;
     line.textContent = '';
     function type() {
