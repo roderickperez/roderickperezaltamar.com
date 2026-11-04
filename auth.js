@@ -2,63 +2,105 @@
   const dialog = document.querySelector("#auth-dialog");
   const message = document.querySelector("#auth-message");
   const google = document.querySelector("#google-login");
-  const emailButton = document.querySelector("#email-login");
+  const login = document.querySelector("#email-login");
   const loginButton = document.querySelector("#login-button");
-  let client;
+  const panel = document.querySelector("#learning-content");
+  const course = document.querySelector("[data-course]")?.dataset.course;
+  let client, currentUser = null, checkVersion = 0;
 
-  function render(session) {
-    const user = session && session.user;
-    document.querySelector("#signed-out").hidden = !!user;
-    document.querySelector("#signed-in").hidden = !user;
-    document.querySelector("#signed-email").textContent = user ? `Signed in as ${user.email || "your account"}.` : "";
-    loginButton.textContent = user ? "Account ↗" : "Sign in ↗";
-    const status = document.querySelector("#course-status");
-    status.textContent = user ? "You're signed in. Course materials will appear here when they are ready." : "Sign in to access courses when they become available.";
-    if (!user) {
+  function panelText(title, text, offerLogin = false) {
+    if (!panel) return;
+    panel.replaceChildren();
+    const h = document.createElement("h2"), p = document.createElement("p");
+    h.textContent = title; p.textContent = text;
+    panel.append(h, p);
+    if (offerLogin) {
       const button = document.createElement("button");
-      button.type = "button";
-      button.textContent = "Sign in ↗";
+      button.className = "auth-action"; button.type = "button"; button.textContent = "Sign in";
       button.addEventListener("click", () => dialog.showModal());
-      status.append(" ", button);
+      panel.append(button);
     }
   }
 
+  async function loadCourse(user) {
+    const version = ++checkVersion;
+    if (!panel) return;
+    if (!client) return panelText("Sign-in is being set up", "Course access will be available once sign-in is configured.");
+    if (!user) return panelText("Sign in to continue", "Access to this course is by invitation.", true);
+    panelText("Checking access", "Please wait…");
+    try {
+      const [owner, grant] = await Promise.all([
+        client.from("course_owners").select("user_id").eq("user_id", user.id).maybeSingle(),
+        client.from("course_access").select("course_id").eq("user_id", user.id).eq("course_id", course).maybeSingle()
+      ]);
+      if (version !== checkVersion) return;
+      if (owner.error || grant.error) throw new Error("Access check failed");
+      if (!owner.data && !grant.data) return panelText("Access not yet granted", "Your account does not have access to this course. Contact the course owner for an invitation.");
+      const { data, error } = await client.from("course_lessons").select("title, body, position").eq("course_id", course).order("position");
+      if (version !== checkVersion) return;
+      if (error) throw error;
+      if (!data.length) return panelText("You're in", "There are no lessons published for this course yet.");
+      panelText("Course lessons", "Select a lesson below to begin.");
+      for (const lesson of data) {
+        const article = document.createElement("article"), heading = document.createElement("h3"), text = document.createElement("p");
+        article.className = "lesson"; heading.textContent = lesson.title; text.textContent = lesson.body;
+        article.append(heading, text); panel.append(article);
+      }
+    } catch (_) {
+      if (version === checkVersion) panelText("Course temporarily unavailable", "We couldn't verify access. Please try again later.");
+    }
+  }
+
+  function render(session) {
+    currentUser = session?.user || null;
+    document.querySelector("#signed-out").hidden = !!currentUser;
+    document.querySelector("#signed-in").hidden = !currentUser;
+    document.querySelector("#signed-email").textContent = currentUser ? `Signed in as ${currentUser.email || "your account"}.` : "";
+    loginButton.textContent = currentUser ? "Account ↗" : "Sign in ↗";
+    const status = document.querySelector("#course-status");
+    if (status) status.textContent = currentUser ? "Open a course to check your access." : "Sign in to access courses you have been invited to.";
+    void loadCourse(currentUser);
+  }
   loginButton.addEventListener("click", () => dialog.showModal());
   document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#email-form").addEventListener("submit", async event => {
-    event.preventDefault();
-    if (!client) return;
-    message.textContent = "Sending your sign-in link…";
-    const { error } = await client.auth.signInWithOtp({ email: document.querySelector("#email").value.trim(), options: { shouldCreateUser: false, emailRedirectTo: window.location.origin + "/" } });
-    message.textContent = error ? "Unable to send a link. Check your email or contact the site owner for an invitation." : "If your email has access, check your inbox for a sign-in link.";
+    event.preventDefault(); if (!client) return;
+    message.textContent = "Signing in…";
+    const { error } = await client.auth.signInWithPassword({ email: document.querySelector("#email").value.trim(), password: document.querySelector("#password").value });
+    message.textContent = error ? "Could not sign in. Check your email and password, or request an invitation." : "Signed in.";
+    if (!error) document.querySelector("#password").value = "";
   });
   google.addEventListener("click", async () => {
     if (!client) return;
-    const { error } = await client.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin + "/" } });
+    const { error } = await client.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin + window.location.pathname } });
     if (error) message.textContent = "Google sign-in is unavailable. Please try again later.";
+  });
+  document.querySelector("#set-password-form").addEventListener("submit", async event => {
+    event.preventDefault(); if (!client || !currentUser) return;
+    const { error } = await client.auth.updateUser({ password: document.querySelector("#new-password").value });
+    message.textContent = error ? "Could not save your password. Please try again." : "Password saved.";
+    if (!error) document.querySelector("#new-password").value = "";
   });
   document.querySelector("#sign-out").addEventListener("click", async () => {
     if (!client) return;
     const { error } = await client.auth.signOut();
     message.textContent = error ? "Could not sign out. Please try again." : "You are signed out.";
   });
-
   async function initialize() {
     try {
       const response = await fetch("/api/config", { cache: "no-store" });
-      if (!response.ok) return;
+      if (!response.ok) throw new Error();
       const config = await response.json();
-      if (!config.url || !config.key || !window.supabase) return;
+      if (!config.url || !config.key || !window.supabase) { panelText("Sign-in is being set up", "Course access will be available once sign-in is configured."); return; }
       client = window.supabase.createClient(config.url, config.key);
+      client.auth.onAuthStateChange((_event, session) => { setTimeout(() => render(session), 0); });
       const { data, error } = await client.auth.getSession();
       if (error) throw error;
-      google.disabled = false;
-      emailButton.disabled = false;
-      message.textContent = "";
+      google.disabled = false; login.disabled = false; message.textContent = "";
       render(data.session);
-      client.auth.onAuthStateChange((_event, session) => render(session));
     } catch (_) {
       message.textContent = "Sign-in is temporarily unavailable. Please try again later.";
+      panelText("Sign-in temporarily unavailable", "Please try again later.");
     }
   }
   initialize();
