@@ -80,6 +80,7 @@
           const chosen = [...input.files].map(file => ({file, path: file.webkitRelativePath.split("/").slice(1).join("/")}));
           const files = chosen.filter(({path}) => (rootFiles.has(path) || path.startsWith("generated/") || path.startsWith("vendor/")) && !/(^|\/)(instructor_private|private|\.git)(\/|$)|test_answer_key|final_project_solution|projectsolution|\.bak$/i.test(path));
           if (!files.some(x => x.path === "index.html") || !files.some(x => x.path === "generated/course.json")) { progress.textContent = "Choose the built sandbox folder containing index.html and generated/course.json."; return; }
+          files.sort((a, b) => Number(a.path === "index.html") - Number(b.path === "index.html"));
           button.disabled = true; input.disabled = true;
           try {
             for (let i = 0; i < files.length; i++) {
