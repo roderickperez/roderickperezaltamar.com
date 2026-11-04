@@ -11,12 +11,29 @@ module.exports = async function (req, res) {
   const url = process.env.SUPABASE_URL, key = process.env.SUPABASE_PUBLISHABLE_KEY;
   if (!url || !key) return res.status(503).end();
   try {
-    const target = url + "/storage/v1/object/authenticated/private-courses/" + segments.map(encodeURIComponent).join("/");
-    const response = await fetch(target, { headers: { apikey: key, Authorization: "Bearer " + token } });
+    const headers = { apikey: key, Authorization: "Bearer " + token };
+    const prefix = url + "/storage/v1/object/authenticated/private-courses/";
+    const pointer = await fetch(prefix + encodeURIComponent(segments[0]) + "/current.json", { headers });
+    let objectSegments = segments;
+    if (pointer.ok) {
+      const manifest = await pointer.json();
+      const requested = segments.slice(1).join("/");
+      const digest = manifest?.version === 1 && manifest?.files?.[requested];
+      if (typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) return res.status(404).send("Course file not found.");
+      objectSegments = [segments[0], "objects", digest];
+    } else {
+      let body = {};
+      try { body = await pointer.json(); } catch (_) {}
+      if (pointer.status !== 404 && !(pointer.status === 400 && String(body.statusCode) === "404")) {
+        return res.status(403).send("Course file unavailable or access denied.");
+      }
+    }
+    const target = prefix + objectSegments.map(encodeURIComponent).join("/");
+    const response = await fetch(target, { headers });
     if (!response.ok) return res.status(response.status === 404 ? 404 : 403).send("Course file unavailable or access denied.");
     const size = Number(response.headers.get("content-length") || 0);
     if (size > 4 * 1024 * 1024) {
-      const signed = await fetch(url + "/storage/v1/object/sign/private-courses/" + segments.map(encodeURIComponent).join("/"), {
+      const signed = await fetch(url + "/storage/v1/object/sign/private-courses/" + objectSegments.map(encodeURIComponent).join("/"), {
         method: "POST",
         headers: { apikey: key, Authorization: "Bearer " + token, "Content-Type": "application/json" },
         body: JSON.stringify({ expiresIn: 60 })

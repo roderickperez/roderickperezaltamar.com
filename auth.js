@@ -38,7 +38,10 @@
       if (!owner.data && !grant.data) return panelText("Access not yet granted", "Your account does not have access to this course. Contact the course owner for an invitation.");
       const isOwner = !!owner.data;
       const isManagement = isOwner && new URLSearchParams(window.location.search).get("manage") === "1";
-      const { data: indexFile, error: indexError } = await client.storage.from("private-courses").download(course + "/index.html");
+      const { data: manifestFile, error: manifestError } = await client.storage.from("private-courses").download(course + "/current.json");
+      const { data: indexFile, error: indexError } = manifestFile && !manifestError
+        ? { data: manifestFile, error: null }
+        : await client.storage.from("private-courses").download(course + "/index.html");
       if (version !== checkVersion) return;
       if (indexFile && !indexError) {
         panelText(isManagement ? "Manage course" : "Opening your course", isManagement ? "Upload an updated course build below." : "Please wait…");
@@ -77,12 +80,19 @@
           files.sort((a, b) => Number(a.path === "index.html") - Number(b.path === "index.html"));
           button.disabled = true; input.disabled = true;
           try {
+            const manifest = { version: 1, files: {} };
             for (let i = 0; i < files.length; i++) {
               const {file, path} = files[i];
               progress.textContent = `Uploading ${i + 1} of ${files.length}…`;
-              const {error} = await client.storage.from("private-courses").upload(course + "/" + path, file, {upsert: true, cacheControl: "0", contentType: file.type || "application/octet-stream"});
+              const digestBytes = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+              const digest = [...new Uint8Array(digestBytes)].map(n => n.toString(16).padStart(2, "0")).join("");
+              manifest.files[path] = digest;
+              const {error} = await client.storage.from("private-courses").upload(course + "/objects/" + digest, file, {upsert: true, cacheControl: "0", contentType: file.type || "application/octet-stream"});
               if (error) throw error;
             }
+            const publication = new Blob([JSON.stringify(manifest)], {type: "application/json"});
+            const {error} = await client.storage.from("private-courses").upload(course + "/current.json", publication, {upsert: true, cacheControl: "0", contentType: "application/json"});
+            if (error) throw error;
             progress.textContent = "Upload complete. Refresh this page to open the course.";
           } catch (_) { progress.textContent = "Upload failed. Check that private storage is configured, then retry."; }
           finally { button.disabled = false; input.disabled = false; }
