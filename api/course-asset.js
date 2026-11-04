@@ -14,6 +14,19 @@ module.exports = async function (req, res) {
     const target = url + "/storage/v1/object/authenticated/private-courses/" + segments.map(encodeURIComponent).join("/");
     const response = await fetch(target, { headers: { apikey: key, Authorization: "Bearer " + token } });
     if (!response.ok) return res.status(response.status === 404 ? 404 : 403).send("Course file unavailable or access denied.");
+    const size = Number(response.headers.get("content-length") || 0);
+    if (size > 4 * 1024 * 1024) {
+      const signed = await fetch(url + "/storage/v1/object/sign/private-courses/" + segments.map(encodeURIComponent).join("/"), {
+        method: "POST",
+        headers: { apikey: key, Authorization: "Bearer " + token, "Content-Type": "application/json" },
+        body: JSON.stringify({ expiresIn: 60 })
+      });
+      if (!signed.ok) return res.status(403).send("Course file unavailable or access denied.");
+      const data = await signed.json();
+      if (typeof data.signedURL !== "string" || !data.signedURL.startsWith("/object/sign/private-courses/")) return res.status(502).end();
+      res.setHeader("Referrer-Policy", "no-referrer");
+      return res.redirect(302, url + "/storage/v1" + data.signedURL);
+    }
     const extension = segments[segments.length - 1].split(".").pop().toLowerCase();
     const types = {html:"text/html; charset=utf-8", js:"text/javascript; charset=utf-8", mjs:"text/javascript; charset=utf-8", css:"text/css; charset=utf-8", json:"application/json; charset=utf-8", svg:"image/svg+xml", jpg:"image/jpeg", jpeg:"image/jpeg", png:"image/png", csv:"text/csv; charset=utf-8", pdf:"application/pdf", wasm:"application/wasm", ipynb:"application/json; charset=utf-8"};
     res.setHeader("Content-Type", types[extension] || response.headers.get("content-type") || "application/octet-stream");
