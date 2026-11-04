@@ -13,3 +13,6 @@ body,button,input,textarea,select{font-family:ui-monospace,'Cascadia Code','SFMo
 .eyebrow{display:flex;align-items:center;gap:10px}
 .eyebrow:before{display:none}
 .eyebrow-dot{font-size:17px;line-height:1;letter-spacing:0}
+
+/* Improve the readability of homepage section labels. */
+.section .label{font-size:14px;letter-spacing:.17em}
