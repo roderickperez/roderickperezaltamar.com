@@ -37,10 +37,11 @@
       if (owner.error || grant.error) throw new Error("Access check failed");
       if (!owner.data && !grant.data) return panelText("Access not yet granted", "Your account does not have access to this course. Contact the course owner for an invitation.");
       const isOwner = !!owner.data;
+      const isManagement = isOwner && new URLSearchParams(window.location.search).get("manage") === "1";
       const { data: indexFile, error: indexError } = await client.storage.from("private-courses").download(course + "/index.html");
       if (version !== checkVersion) return;
       if (indexFile && !indexError) {
-        panelText("Course ready", "Open the full-page course. Python runs in your browser using Pyodide.");
+        panelText(isManagement ? "Manage course" : "Opening your course", isManagement ? "Upload an updated course build below." : "Please wait…");
         const open = document.createElement("button");
         open.type = "button"; open.className = "auth-action"; open.textContent = "Open full-page course ↗";
         open.addEventListener("click", async () => {
@@ -56,19 +57,11 @@
           }
         });
         panel.append(open);
-        if (!new URLSearchParams(window.location.search).has("manage")) open.click();
+        if (!isManagement) open.click();
       } else {
-        panelText("Course not uploaded yet", isOwner ? "Upload the prepared course folder below after private storage is configured." : "This course has not been published yet.");
-        if (course === "python-renewable") {
-          const note = document.createElement("p");
-          note.textContent = "The existing renewable course is still public and is not protected by the course login.";
-          const publicLink = document.createElement("a");
-          publicLink.href = "https://roderickperez.github.io/EAGE_PythonRenewableEnergyCourse/sandbox/";
-          publicLink.className = "auth-action"; publicLink.textContent = "Open existing public course ↗";
-          panel.append(note, publicLink);
-        }
+        panelText(isManagement ? "Course not uploaded yet" : "Course temporarily unavailable", isManagement ? "Upload the prepared course folder below." : "Please try again later or contact the course owner.");
       }
-      if (isOwner) {
+      if (isManagement) {
         const section = document.createElement("section");
         const help = document.createElement("p");
         help.textContent = "Owner: select the prepared sandbox folder to upload or update this course. Only the browser course files and generated student assets will be uploaded.";
