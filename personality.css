@@ -9,3 +9,7 @@ body,button,input,textarea,select{font-family:ui-monospace,'Cascadia Code','SFMo
 @media(max-width:700px){.hero h1{font-size:clamp(39px,9vw,64px)}.code-note{font-size:11px}}
 @media(prefers-reduced-motion:reduce){.code-caret{animation:none}}
 
+
+.eyebrow{display:flex;align-items:center;gap:10px}
+.eyebrow:before{display:none}
+.eyebrow-dot{font-size:17px;line-height:1;letter-spacing:0}
