@@ -41,6 +41,23 @@
         window.location.replace("https://roderickperez.github.io/EAGE_PythonRenewableEnergyCourse/sandbox/");
         return;
       }
+      const privatePreviews = {
+        "fault-segmentation": { url: "https://codespaces.new/roderickperez/EAGE_faultSegmentation?ref=main&quickstart=1", port: "8770", path: "/sandbox/" },
+        "energy-decision-ai": { url: "https://codespaces.new/roderickperez/EAGE_DecisionAnalysis_AI?quickstart=1", port: "8788", path: "/" }
+      };
+      if (privatePreviews[course]) {
+        if (!owner.data) return panelText("Course hosting is being set up", "This course is not available to invited learners yet.");
+        const preview = privatePreviews[course];
+        panelText("Open your private course", `This owner-only preview runs in GitHub Codespaces. Create or resume the Codespace, then open port ${preview.port} and visit ${preview.path}. Keep port visibility Private. Codespaces usage may incur charges beyond your allowance.`);
+        const link = document.createElement("a");
+        link.href = preview.url; link.className = "auth-action";
+        link.textContent = "Open private course ↗";
+        panel.append(link);
+        return;
+      }
+      if (course === "eage-python-course") {
+        return panelText("Course is being prepared", "This course is not connected to a hosted version yet.");
+      }
       const { data, error } = await client.from("course_lessons").select("title, body, position").eq("course_id", course).order("position");
       if (version !== checkVersion) return;
       if (error) throw error;

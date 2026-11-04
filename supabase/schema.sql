@@ -5,12 +5,12 @@ create table public.course_owners (
 );
 create table public.course_access (
   user_id uuid not null references auth.users(id) on delete cascade,
-  course_id text not null check (course_id in ('python-renewable','fault-segmentation','energy-decision-ai')),
+  course_id text not null check (course_id in ('python-renewable','fault-segmentation','energy-decision-ai','eage-python-course')),
   primary key (user_id, course_id)
 );
 create table public.course_lessons (
   id bigint generated always as identity primary key,
-  course_id text not null check (course_id in ('python-renewable','fault-segmentation','energy-decision-ai')),
+  course_id text not null check (course_id in ('python-renewable','fault-segmentation','energy-decision-ai','eage-python-course')),
   position integer not null,
   title text not null,
   body text not null default '',
@@ -37,3 +37,4 @@ create policy lessons_read on public.course_lessons for select to authenticated 
 create policy lessons_owner_write on public.course_lessons for all to authenticated
 using (exists (select 1 from public.course_owners where user_id = (select auth.uid())))
 with check (exists (select 1 from public.course_owners where user_id = (select auth.uid())));
+
