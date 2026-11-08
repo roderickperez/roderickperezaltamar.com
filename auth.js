@@ -115,6 +115,16 @@
     if (status) status.textContent = currentUser ? "Open a course to check your access." : "Sign in to access courses you have been invited to.";
     void loadCourse(currentUser);
   }
+  // Closing a modal before navigating avoids scrolling the obscured page underneath it.
+  dialog.addEventListener("click", event => {
+    const link = event.target.closest('a[href="/#courses"]');
+    const target = document.getElementById("courses");
+    if (!link || !target || event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    dialog.close();
+    if (window.location.hash !== "#courses") history.pushState(null, "", "/#courses");
+    requestAnimationFrame(() => target.scrollIntoView({ behavior: "smooth", block: "start" }));
+  });
   loginButton.addEventListener("click", () => dialog.showModal());
   document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#email-form").addEventListener("submit", async event => {
