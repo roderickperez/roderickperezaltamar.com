@@ -31,7 +31,7 @@
     try {
       const [owner, grant] = await Promise.all([
         client.from("course_owners").select("user_id").eq("user_id", user.id).maybeSingle(),
-        client.from("course_access").select("course_id").eq("user_id", user.id).eq("course_id", course).maybeSingle()
+        client.from("course_access").select("course_id").eq("user_id", user.id).in("course_id", course === "eage-python-course" ? [course, "python-renewable", "fault-segmentation", "energy-decision-ai"] : [course]).limit(1).maybeSingle()
       ]);
       if (version !== checkVersion) return;
       if (owner.error || grant.error) throw new Error("Access check failed");
