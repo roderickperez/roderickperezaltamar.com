@@ -62,6 +62,21 @@
     resizeGlobe();window.addEventListener("resize",resizeGlobe);animate();
   }else{$("globe").innerHTML='<p style="padding:80px;text-align:center">Globe unavailable. Choose a region below.</p>'}
   function safe(value){const div=document.createElement("div");div.textContent=String(value);return div.innerHTML}
+  function featurePopup(layer,content,onOpen){
+    let original;
+    layer.on("mouseover",()=>{
+      if(original)return;
+      const o=layer.options;
+      original={color:o.color,weight:o.weight,fillColor:o.fillColor,fillOpacity:o.fillOpacity};
+      if(layer instanceof L.CircleMarker)original.radius=layer.getRadius();
+      const highlight={color:"#ffffff",weight:Math.max(3,(o.weight||1)+2),fillColor:"#ffffff",fillOpacity:.35};
+      if(original.radius!==undefined)highlight.radius=original.radius+2;
+      layer.setStyle(highlight);
+    });
+    layer.on("mouseout",()=>{if(original){layer.setStyle(original);original=null}});
+    layer.bindPopup(content,{maxWidth:320,maxHeight:240,closeButton:true,autoClose:true,closeOnClick:true});
+    if(onOpen)layer.on("popupopen",event=>onOpen(event.popup.getElement()));
+  }
   function polygonAcres(geometry){
     if(!geometry||!["Polygon","MultiPolygon"].includes(geometry.type))return null;
     const polygons=geometry.type==="Polygon"?[geometry.coordinates]:geometry.coordinates;
@@ -83,10 +98,10 @@
       L.geoJSON(data,{style:feature=>feature.geometry.type==="Point"?{radius:d.id===304?5:2.5,color:d.color,weight:1,fillOpacity:.8}:{color:d.color,weight:d.weight||1,fillOpacity:.06},pointToLayer:(_,latlng)=>L.circleMarker(latlng,{radius:d.id===304?5:2.5,color:d.color,weight:1,fillOpacity:.8}),onEachFeature:(feature,layer)=>{
         const entries=Object.entries(feature.properties||{}).filter(([k,v])=>v!==null&&v!==""&&!/^(objectid|shape|globalid)/i.test(k)).slice(0,8);
         const details="<strong>"+safe(d.name)+"</strong>"+entries.map(([k,v])=>"<br>"+safe(k)+": "+safe(v)).join("");
-        layer.bindTooltip(details,{sticky:true});layer.on("click",()=>{info.innerHTML=details+'<br><a href="https://www.sodir.no/en/facts/data-and-analyses/open-data/" target="_blank" rel="noopener">Source: Norwegian Offshore Directorate ↗</a>'});
+        featurePopup(layer,details+'<br><a href="https://www.sodir.no/en/facts/data-and-analyses/open-data/" target="_blank" rel="noopener">Source: Norwegian Offshore Directorate ↗</a>');
       }}).addTo(layerGroup);
     });
-    info.innerHTML="<strong>Norwegian North Sea</strong>"+loaded+' of 4 official layers loaded. Hover or select a feature for its attributes. Coverage is limited to the initial study area; some layers may be truncated at 1,000 records. <a href="https://www.sodir.no/en/facts/data-and-analyses/open-data/" target="_blank" rel="noopener">Source &amp; data limitations ↗</a>';
+    info.innerHTML="<strong>Norwegian North Sea</strong>"+loaded+' of 4 official layers loaded. Hover to highlight; click a feature for its attributes. Coverage is limited to the initial study area; some layers may be truncated at 1,000 records. <a href="https://www.sodir.no/en/facts/data-and-analyses/open-data/" target="_blank" rel="noopener">Source &amp; data limitations ↗</a>';
   }
   async function loadTexas(region){
     const base="https://gis.rrc.texas.gov/server/rest/services/rrc_public/RRC_Public_Viewer_Srvs/MapServer/";
@@ -102,8 +117,8 @@
         const props=feature.properties||{}, keys=d.id===24?["ABSTRACT_NUMBER","LEVEL1_SURVEY_NAME","LEVEL2_BLOCK_NUMBER","LEVEL3_SURVEY_NUMBER"]:d.id===1?["API","GIS_WELL_NUMBER","GIS_SYMBOL_DESCRIPTION","GIS_LOCATION_SOURCE"]:["OPERATOR","SYSTEM_NAME","COMMODITY_DESCRIPTION","DIAMETER","STATUS"];
         const acres=d.id===24?polygonAcres(feature.geometry):null;
         const details="<strong>"+safe(d.name)+"</strong>"+keys.filter(k=>props[k]!=null&&props[k]!=="").map(k=>"<br>"+safe(k.replaceAll("_"," "))+": "+safe(props[k])).join("")+(acres!==null?"<br>Approximate mapped area: "+acres.toFixed(1)+" acres":"");
-        layer.bindTooltip(details,{sticky:true});
-        layer.on("click",()=>{info.innerHTML=details+(d.id===24?"<br>Original survey, not a verified lease boundary.":"")+(d.id===1?'<br><button id="show-pump" class="outline-button">View representative 3D pumping jack ↗</button>':"")+'<br><a href="https://gis.rrc.texas.gov/gisviewer/" target="_blank" rel="noopener">Texas Railroad Commission GIS ↗</a>';if(d.id===1)$("show-pump").addEventListener("click",()=>window.openPumpScene())});
+        const content=details+(d.id===24?"<br>Original survey, not a verified lease boundary.":"")+(d.id===1?'<br><button class="feature-action show-pump" type="button">View representative 3D pumping jack ↗</button>':"")+'<br><a href="https://gis.rrc.texas.gov/gisviewer/" target="_blank" rel="noopener">Texas Railroad Commission GIS ↗</a>';
+        featurePopup(layer,content,d.id===1?popup=>popup.querySelector(".show-pump").addEventListener("click",()=>window.openPumpScene()):null);
       }}).addTo(layerGroup);
     });
     info.innerHTML="<strong>Permian study area</strong>"+loaded+' of 3 RRC layers loaded: original land surveys, well locations and pipelines. Surveys are not lease boundaries. Initial fixed area; up to 1,000 records per layer. Select a well to view an illustrative 3D pumping jack. <a href="https://gis.rrc.texas.gov/gisviewer/" target="_blank" rel="noopener">Official GIS ↗</a>';
@@ -117,14 +132,15 @@
       if($("map").hidden||$("location-label").textContent!=="PERMIAN BASIN")return;
       L.geoJSON(data,{style:{color:"#ec80d9",weight:2,fillColor:"#ec80d9",fillOpacity:.15},onEachFeature:(feature,layer)=>{
         const p=feature.properties||{};const details="<strong>Texas GLO state lease "+safe(p.LEASE_NUMBER||"")+"</strong><br>Status: "+safe(p.LEASE_STATUS||"unknown")+"<br>Field: "+safe(p.FIELD_NAME||"not stated")+"<br>Current gross / net acres: "+safe(p.CURRENT_GROSS_ACRES??"unknown")+" / "+safe(p.CURRENT_NET_ACRES??"unknown")+"<br>Oil / gas royalty: "+safe(p.LEASE_ROYALTY_OIL??"unknown")+" / "+safe(p.LEASE_ROYALTY_GAS??"unknown");
-        layer.bindTooltip(details,{sticky:true});layer.on("click",()=>{info.innerHTML=details+'<br><button id="use-lease" class="outline-button">Use lease terms in model ↗</button><br><a href="https://services1.arcgis.com/YWG34dhJxrbxQWdF/arcgis/rest/services/Oil_and_Gas_Leases_Active/FeatureServer" target="_blank" rel="noopener">Source: Texas General Land Office ↗</a>';document.getElementById("use-lease").addEventListener("click",()=>{window.dispatchEvent(new CustomEvent("decision-lease-selected",{detail:{lease:p.LEASE_NUMBER,oilRoyalty:p.LEASE_ROYALTY_OIL,gasRoyalty:p.LEASE_ROYALTY_GAS,netAcres:p.CURRENT_NET_ACRES}}));document.querySelector("#economics details").open=true})});
+        const content=details+'<br><button class="feature-action use-lease" type="button">Use lease terms in model ↗</button><br><a href="https://services1.arcgis.com/YWG34dhJxrbxQWdF/arcgis/rest/services/Oil_and_Gas_Leases_Active/FeatureServer" target="_blank" rel="noopener">Source: Texas General Land Office ↗</a>';
+        featurePopup(layer,content,popup=>popup.querySelector(".use-lease").addEventListener("click",()=>{window.dispatchEvent(new CustomEvent("decision-lease-selected",{detail:{lease:p.LEASE_NUMBER,oilRoyalty:p.LEASE_ROYALTY_OIL,gasRoyalty:p.LEASE_ROYALTY_GAS,netAcres:p.CURRENT_NET_ACRES}}));document.querySelector("#economics details").open=true}));
       }}).addTo(layerGroup);
       info.innerHTML+='<br><strong>Pink: '+data.features.length+' Texas GLO state lease geometries</strong> (up to 1,000; not private lease coverage). <a href="https://services1.arcgis.com/YWG34dhJxrbxQWdF/arcgis/rest/services/Oil_and_Gas_Leases_Active/FeatureServer" target="_blank" rel="noopener">GLO lease source ↗</a>';
     }catch(_){if(!$("map").hidden&&$("location-label").textContent==="PERMIAN BASIN")info.innerHTML+='<br>Texas GLO lease layer unavailable. <a href="https://gisweb.glo.texas.gov/glomap/index.html" target="_blank" rel="noopener">Open GLO viewer ↗</a>'}
   }
   function openRegion(key){
     const region=regions[key];$("globe").hidden=true;$("globe-hint").hidden=true;$("map").hidden=false;$("map-info").hidden=false;$("back-globe").hidden=false;
-    $("location-label").textContent=key==="norway"?"NORWEGIAN NORTH SEA":"PERMIAN BASIN";$("workspace-title").textContent=region.name+".";$("workspace-subtitle").textContent=region.subtitle;$("map-badge").textContent="◉   SATELLITE / STUDY AREA";$("map-caption").textContent="PAN & ZOOM  ·  HOVER OR SELECT A FEATURE";info.innerHTML=region.source;
+    $("location-label").textContent=key==="norway"?"NORWEGIAN NORTH SEA":"PERMIAN BASIN";$("workspace-title").textContent=region.name+".";$("workspace-subtitle").textContent=region.subtitle;$("map-badge").textContent="◉   SATELLITE / STUDY AREA";$("map-caption").textContent="HOVER TO HIGHLIGHT  ·  CLICK FOR DETAILS";info.innerHTML=region.source;
     if(!window.L){info.textContent="Map library unavailable. Check your connection.";return}
     if(!map){map=L.map("map",{zoomControl:true}).setView([region.lat,region.lng],region.zoom);L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",{attribution:"Tiles © Esri, Maxar, Earthstar Geographics and the GIS User Community",maxZoom:19}).addTo(map);layerGroup=L.layerGroup().addTo(map)}else{layerGroup.clearLayers();map.setView([region.lat,region.lng],region.zoom)}
     setTimeout(()=>map.invalidateSize(),50);if(key==="norway")loadNorway(region);else loadTexas(region);

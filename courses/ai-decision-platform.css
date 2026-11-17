@@ -46,3 +46,4 @@ html.light .globe-hint strong{color:#e7f4ec}
 .globe-hint:not([open]) summary span::before{content:"+"}
 .globe-hint-content{padding:4px 14px 8px}
 .globe-hint-content>span{color:#92c8aa;font-size:9px;letter-spacing:.12em}
+.leaflet-popup-content{font:12px/1.5 "DM Sans",sans-serif;overflow-wrap:anywhere}.leaflet-popup-content strong{display:block}.feature-action{margin:8px 0;border:1px solid #618270;background:#edf7f0;color:#173a27;padding:8px;text-align:left;white-space:normal;font-size:11px;font-weight:700}
