@@ -6,6 +6,7 @@
   const loginButton = document.querySelector("#login-button");
   const panel = document.querySelector("#learning-content");
   const course = document.querySelector("[data-course]")?.dataset.course;
+  const roadmap = course === "python-renewable" && new URLSearchParams(window.location.search).get("view") === "roadmap";
   let client, currentUser = null, checkVersion = 0;
 
   function panelText(title, text, offerLogin = false) {
@@ -54,7 +55,8 @@
             if (!session.session) throw new Error("Please sign in again.");
             const response = await fetch("/api/course-session", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: session.session.access_token }) });
             if (!response.ok) throw new Error("Could not start the course session.");
-            window.location.assign("/private-course/" + encodeURIComponent(course) + "/index.html");
+            const entry = roadmap ? "generated/learning-roadmap/index.html" : "index.html";
+            window.location.assign("/private-course/" + encodeURIComponent(course) + "/" + entry);
           } catch (_) {
             panelText("Could not open the course", "Please sign in again, then retry.");
           }
@@ -136,7 +138,7 @@
   });
   google.addEventListener("click", async () => {
     if (!client) return;
-    const { error } = await client.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin + window.location.pathname } });
+    const { error } = await client.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin + window.location.pathname + (roadmap ? "?view=roadmap" : "") } });
     if (error) message.textContent = "Google sign-in is unavailable. Please try again later.";
   });
   document.querySelector("#set-password-form").addEventListener("submit", async event => {
