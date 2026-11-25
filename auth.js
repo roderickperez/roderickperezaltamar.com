@@ -4,10 +4,67 @@
   const google = document.querySelector("#google-login");
   const login = document.querySelector("#email-login");
   const loginButton = document.querySelector("#login-button");
+  const workbenchButton = document.querySelector("#workbench-button");
+  const dialogWorkbenchButton = document.querySelector("#dialog-workbench-button");
   const panel = document.querySelector("#learning-content");
   const course = document.querySelector("[data-course]")?.dataset.course;
   const roadmap = course === "python-renewable" && new URLSearchParams(window.location.search).get("view") === "roadmap";
-  let client, currentUser = null, checkVersion = 0;
+  let client, currentUser = null, checkVersion = 0, ownerCheckVersion = 0;
+
+  function setWorkbenchVisible(visible) {
+    if (workbenchButton) workbenchButton.hidden = !visible;
+    if (dialogWorkbenchButton) dialogWorkbenchButton.hidden = !visible;
+  }
+
+  async function updateOwnerWorkbenchVisibility(user) {
+    const version = ++ownerCheckVersion;
+    setWorkbenchVisible(false);
+    if (!client || !user) return;
+    try {
+      const { data, error } = await client
+        .from("course_owners")
+        .select("user_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (version !== ownerCheckVersion) return;
+      if (!error && data && data.user_id === user.id) {
+        setWorkbenchVisible(true);
+      }
+    } catch (_) {
+      if (version === ownerCheckVersion) setWorkbenchVisible(false);
+    }
+  }
+
+  async function launchPrivateWorkbench(triggerBtn) {
+    if (!client || !currentUser) {
+      dialog.showModal();
+      return;
+    }
+    const prevLabel = triggerBtn ? triggerBtn.textContent : "";
+    if (triggerBtn) {
+      triggerBtn.disabled = true;
+      triggerBtn.textContent = "Opening…";
+    }
+    try {
+      const { data: sessionData } = await client.auth.getSession();
+      if (!sessionData.session) throw new Error("No active session");
+      const response = await fetch("/api/course-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token: sessionData.session.access_token }),
+      });
+      if (!response.ok) throw new Error("Could not establish private session");
+      window.location.assign("/private-workbench/");
+    } catch (_) {
+      message.textContent = "Could not open the private workbench. Please sign in again.";
+      if (!dialog.open) dialog.showModal();
+    } finally {
+      if (triggerBtn) {
+        triggerBtn.disabled = false;
+        triggerBtn.textContent = prevLabel;
+      }
+    }
+  }
 
   function panelText(title, text, offerLogin = false) {
     if (!panel) return;
@@ -115,6 +172,7 @@
     document.querySelector("#auth-title").textContent = currentUser ? "Your account." : "Sign in.";
     const status = document.querySelector("#course-status");
     if (status) status.textContent = currentUser ? "Open a course to check your access." : "Sign in to access courses you have been invited to.";
+    void updateOwnerWorkbenchVisibility(currentUser);
     void loadCourse(currentUser);
   }
   // Closing a modal before navigating avoids scrolling the obscured page underneath it.
@@ -128,6 +186,8 @@
     requestAnimationFrame(() => target.scrollIntoView({ behavior: "smooth", block: "start" }));
   });
   loginButton.addEventListener("click", () => dialog.showModal());
+  if (workbenchButton) workbenchButton.addEventListener("click", () => void launchPrivateWorkbench(workbenchButton));
+  if (dialogWorkbenchButton) dialogWorkbenchButton.addEventListener("click", () => void launchPrivateWorkbench(dialogWorkbenchButton));
   document.querySelector("#close-dialog").addEventListener("click", () => dialog.close());
   document.querySelector("#email-form").addEventListener("submit", async event => {
     event.preventDefault(); if (!client) return;

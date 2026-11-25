@@ -1,1 +1,29 @@
-{"rewrites":[{"source":"/private-course/:path*","destination":"/api/course-asset?path=:path*"}]}
+{
+  "functions": {
+    "api/workbench-asset.js": {
+      "includeFiles": "private-workbench-dist/**"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/private-course/:path*",
+      "destination": "/api/course-asset?path=:path*"
+    },
+    {
+      "source": "/private-workbench",
+      "destination": "/api/workbench-asset?path=index.html"
+    },
+    {
+      "source": "/private-workbench/:path*",
+      "destination": "/api/workbench-asset?path=:path*"
+    },
+    {
+      "source": "/private-workbench-dist/:path*",
+      "destination": "/api/workbench-asset?deny=1"
+    },
+    {
+      "source": "/api/workbench-agent/:route*",
+      "destination": "/api/workbench-agent?route=:route*"
+    }
+  ]
+}
