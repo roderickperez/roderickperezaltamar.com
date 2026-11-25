@@ -6,6 +6,26 @@ const {
   verifyOwnerFromCookie,
 } = require("./_workbench-lib");
 
+const CANONICAL_PROJECTS_PROMPT = [
+  "TiefWerk (Energy & Earth platform, tiefwerk.ai) with subdivisions:",
+  "  - TiefWerk / Kosmos (global geospatial & energy intelligence, maps, wells, markets)",
+  "  - TiefWerk / Otto (Otto AI assistant, agents, watchlists, copilot)",
+  "  - TiefWerk / Scout (prospects, basins, Norway/global datasets, exploration)",
+  "  - TiefWerk / Bauen (3D subsurface viewer, Cesium/WebGL, seismic, faults, horizons)",
+  "  - TiefWerk / Extract (Petrel/LAS/DLIS extraction, well-log digitizers, OCR/PDF)",
+  "  - TiefWerk / Welt (watercolor/map explorer, cartography, alerts)",
+  "  - TiefWerk / Stratum (sedimentation & sequence stratigraphy lab)",
+  "  - TiefWerk / Automata (pipelines, Wache, Grun, Roboter, Blender, PostGIS/Supabase)",
+  "HandSchrift (handwriting/stylus/manuscript tooling)",
+  "DominoLab (DominoLab experiments & interactive prototypes)",
+  "OMV (OMV work, internal courses, roderick.perezaltamar@omv.com)",
+  "Papers (academic papers, arXiv, OnePetro, SPE/SEG preprints)",
+  "Thesis (thesis research, dissertation, university milestones)",
+  "Conferences (EAGE, SEG, SPE, workshops, abstracts, talks)",
+  "Travel (flights, hotels, itineraries, trips)",
+  "Books (books, Kindle, reading list, notes)",
+].join("\n");
+
 const EFFORT_TIERS = [
   "Quick Win < 2h",
   "Weekend Prototype",
@@ -78,7 +98,7 @@ module.exports = async function (req, res) {
 
     if (action === "triage_batch") {
       const items = Array.isArray(body.items) ? body.items.slice(0, 30) : [];
-      const prompt = `Classify each saved technical idea into exact platform (${SOURCE_PLATFORMS.join(", ")}), concise domain, isUntitled boolean, clean suggestedTitle, oneLineSummary, and 2-4 concise tags.\nItems:\n${JSON.stringify(items)}`;
+      const prompt = `Classify each saved email bookmark for Roderick Perez Altamar into exact platform (${SOURCE_PLATFORMS.join(", ")}), domain (prefer his canonical projects/subdivisions below and honor existing gmailLabels as #1 guideline), isUntitled boolean, clean suggestedTitle, oneLineSummary, and 2-4 concise tags.\nCanonical Projects:\n${CANONICAL_PROJECTS_PROMPT}\nItems:\n${JSON.stringify(items)}`;
       const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-2.5-flash", prompt, {
         type: "ARRAY",
         items: {
@@ -108,7 +128,7 @@ module.exports = async function (req, res) {
 
     if (action === "synthesize_projects") {
       const manifest = Array.isArray(body.manifest) ? body.manifest.slice(0, 250) : [];
-      const prompt = `Cluster these technical ideas into cohesive, actionable projects. For each project output title, objective, whyItMatters, domain, mvpScope, techStack (2-6 strings), effortTier (${EFFORT_TIERS.join(" | ")}), checklist (3-5 concrete execution steps), ideaIds (matching input IDs), priorityScore (1-100).\nIdeas:\n${JSON.stringify(manifest)}`;
+      const prompt = `Cluster Roderick Perez Altamar's self-sent emails into cohesive, actionable projects using his canonical projects/subdivisions and existing gmailLabels as primary guidelines.\nCanonical Projects:\n${CANONICAL_PROJECTS_PROMPT}\nFor each project output title, objective, whyItMatters, domain, mvpScope, techStack (2-6 strings), effortTier (${EFFORT_TIERS.join(" | ")}), checklist (3-5 concrete execution steps), ideaIds (matching input IDs), priorityScore (1-100).\nIdeas:\n${JSON.stringify(manifest)}`;
       const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-2.5-pro", prompt, {
         type: "OBJECT",
         properties: {
