@@ -14,6 +14,10 @@
       "destination": "/api/workbench-asset?path=index.html"
     },
     {
+      "source": "/private-workbench/",
+      "destination": "/api/workbench-asset?path=index.html"
+    },
+    {
       "source": "/private-workbench/:path*",
       "destination": "/api/workbench-asset?path=:path*"
     },

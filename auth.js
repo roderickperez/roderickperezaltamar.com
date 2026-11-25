@@ -54,7 +54,7 @@
         body: JSON.stringify({ token: sessionData.session.access_token }),
       });
       if (!response.ok) throw new Error("Could not establish private session");
-      window.location.assign("/private-workbench/");
+      window.location.assign("/private-workbench/index.html");
     } catch (_) {
       message.textContent = "Could not open the private workbench. Please sign in again.";
       if (!dialog.open) dialog.showModal();
