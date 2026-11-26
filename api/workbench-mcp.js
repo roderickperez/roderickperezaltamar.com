@@ -1,21 +1,39 @@
 const {
   appendIdeaWithAgentToken,
+  buildContextPack,
   buildKnowledgeGraphSummary,
+  claimHandoffWithAgentToken,
   classifyIdeaWithServerDecisionModel,
-  getDisplayTitle,
+  createHandoffWithAgentToken,
+  hybridRankIdeas,
+  loadSecondBrainWithAgentToken,
+  rememberRuleWithAgentToken,
   sanitizeIdeaForAgent,
+  upsertWikiPageWithAgentToken,
   verifyAgentTokenAndLoad,
 } = require("./_workbench-lib");
 
 const MCP_TOOLS = [
   {
-    name: "search_ideas",
+    name: "context_pack",
     description:
-      "Search and filter Roderick's curated technical ideas, saved papers, repos, and notes (requires scope: read:ideas).",
+      "One-call startup brief for any AI agent: returns Roderick's profile, confirmed rules, open cross-agent handoffs, matching project wiki summaries, and top priority emails (requires scope: read:ideas).",
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Keyword search across title, summary, notes, tags, and URLs." },
+        query: { type: "string", description: "Optional focus topic or task query." },
+        project_slug: { type: "string", description: "Optional canonical project slug (e.g. tiefwerk-bauen, omv, handschrift)." },
+      },
+    },
+  },
+  {
+    name: "search_ideas",
+    description:
+      "Hybrid ranked search across Roderick's self-sent emails, papers, repos, labels, and notes (requires scope: read:ideas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Keyword search across title, summary, labels, notes, tags, and URLs." },
         domain: { type: "string", description: "Optional category/domain filter." },
         platform: { type: "string", description: "Optional source platform filter." },
         stage: {
@@ -71,6 +89,84 @@ const MCP_TOOLS = [
         notes: { type: "string" },
       },
       required: ["title"],
+    },
+  },
+  {
+    name: "create_handoff",
+    description:
+      "Leave a typed cross-agent handoff packet so another agent (Antigravity, Claude Code, Codex, Gemini, ChatGPT) can pick up mid-task without re-explaining (requires scope: write:handoffs or write:ideas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project_slug: { type: "string", description: "Project slug (e.g. tiefwerk-kosmos, handschrift, omv)." },
+        title: { type: "string" },
+        from_agent: { type: "string" },
+        summary: { type: "string" },
+        what_worked: { type: "array", items: { type: "string" } },
+        what_failed: { type: "array", items: { type: "string" } },
+        open_questions: { type: "array", items: { type: "string" } },
+        relevant_files: { type: "array", items: { type: "string" } },
+        next_step: { type: "string" },
+      },
+      required: ["title", "summary", "next_step"],
+    },
+  },
+  {
+    name: "claim_handoff",
+    description:
+      "Atomically claim an open cross-agent handoff exactly once so two agents never duplicate the same task (requires scope: write:handoffs or write:ideas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        handoff_id: { type: "string" },
+        claimer: { type: "string", description: "Name of the claiming agent (e.g. codex, antigravity, claude-code)." },
+      },
+      required: ["handoff_id"],
+    },
+  },
+  {
+    name: "remember_rule",
+    description:
+      "Save a personal working preference or routing correction so every connected agent follows it (respects human_locked rules; requires scope: write:memory or write:ideas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        rule_text: { type: "string" },
+        kind: { type: "string", enum: ["profile", "routing_rule", "preference"] },
+        pattern: { type: "string" },
+        target_domain: { type: "string" },
+      },
+      required: ["title", "rule_text"],
+    },
+  },
+  {
+    name: "get_wiki_page",
+    description:
+      "Read compiled Living Project Wiki pages (compiled truth, append-only timeline, contradictions, last_verified timestamp) (requires scope: read:projects).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        slug: { type: "string", description: "Optional wiki page slug (omit to list all wiki pages)." },
+      },
+    },
+  },
+  {
+    name: "upsert_wiki_page",
+    description:
+      "Create or update a Living Project Wiki page with compiled truth, optional timeline entry, and replaced_because audit reason (requires scope: write:memory or write:ideas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        slug: { type: "string" },
+        title: { type: "string" },
+        domain: { type: "string" },
+        compiled_truth_md: { type: "string" },
+        replaced_because: { type: "string" },
+        contradictions: { type: "array", items: { type: "string" } },
+        source_idea_ids: { type: "array", items: { type: "string" } },
+      },
+      required: ["slug", "title", "compiled_truth_md"],
     },
   },
 ];
@@ -136,7 +232,11 @@ module.exports = async function (req, res) {
   const args = (params && params.arguments) || {};
 
   const requireScope = (scope) => {
-    if (!baseAuth.scopes.includes(scope)) {
+    const allowed =
+      baseAuth.scopes.includes(scope) ||
+      ((scope === "write:memory" || scope === "write:handoffs") &&
+        baseAuth.scopes.includes("write:ideas"));
+    if (!allowed) {
       res.status(403).json(jsonRpcError(id, -32003, `Token lacks required scope: ${scope}`));
       return false;
     }
@@ -144,37 +244,41 @@ module.exports = async function (req, res) {
   };
 
   try {
+    if (toolName === "context_pack") {
+      if (!requireScope("read:ideas")) return;
+      const brain = await loadSecondBrainWithAgentToken(baseAuth.tokenHash, "read:ideas");
+      const pack = buildContextPack({
+        query: args.query ? String(args.query) : "",
+        projectSlug: args.project_slug ? String(args.project_slug) : "",
+        ideas: baseAuth.ideas,
+        projects: baseAuth.projects,
+        rules: brain.rules,
+        wikiPages: brain.wikiPages,
+        handoffs: brain.handoffs,
+      });
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify(pack, null, 2) }],
+        }),
+      );
+    }
+
     if (toolName === "search_ideas") {
       if (!requireScope("read:ideas")) return;
-      const q = args.query ? String(args.query).toLowerCase() : "";
+      const q = args.query ? String(args.query) : "";
       const domain = args.domain ? String(args.domain).toLowerCase() : "";
       const platform = args.platform ? String(args.platform).toLowerCase() : "";
       const stage = args.stage ? String(args.stage) : "";
       const limit = Math.max(1, Math.min(50, Number(args.limit || 20)));
 
-      const matches = baseAuth.ideas
-        .filter((item) => {
-          if (domain && String(item.domain || "").toLowerCase() !== domain) return false;
-          if (platform && String(item.platform || "").toLowerCase() !== platform) return false;
-          if (stage && item.column !== stage) return false;
-          if (q) {
-            const hay = [
-              getDisplayTitle(item),
-              item.snippet,
-              item.notes,
-              item.aiSummary,
-              item.domain,
-              ...(item.aiTags || []),
-              ...(item.urls || []),
-            ]
-              .join(" ")
-              .toLowerCase();
-            if (!hay.includes(q)) return false;
-          }
-          return true;
-        })
-        .slice(0, limit)
-        .map(sanitizeIdeaForAgent);
+      const prefiltered = baseAuth.ideas.filter((item) => {
+        if (item.isSelfSent === false) return false;
+        if (domain && String(item.domain || "").toLowerCase() !== domain) return false;
+        if (platform && String(item.platform || "").toLowerCase() !== platform) return false;
+        if (stage && item.column !== stage) return false;
+        return true;
+      });
+      const matches = hybridRankIdeas(prefiltered, q, limit).map(sanitizeIdeaForAgent);
 
       return res.status(200).json(
         jsonRpcResult(id, {
@@ -309,6 +413,122 @@ module.exports = async function (req, res) {
       return res.status(200).json(
         jsonRpcResult(id, {
           content: [{ type: "text", text: JSON.stringify({ saved: true, id: ideaId, decision }, null, 2) }],
+        }),
+      );
+    }
+
+    if (toolName === "create_handoff") {
+      if (!requireScope("write:handoffs")) return;
+      const title = String(args.title || "").trim();
+      const summary = String(args.summary || "").trim();
+      const nextStep = String(args.next_step || "").trim();
+      if (!title || !summary || !nextStep) {
+        return res.status(200).json(jsonRpcError(id, -32602, "title, summary, and next_step are required"));
+      }
+      const created = await createHandoffWithAgentToken(baseAuth.tokenHash, {
+        project_slug: String(args.project_slug || "general").trim(),
+        title,
+        from_agent: String(args.from_agent || baseAuth.label || "agent").trim(),
+        summary,
+        what_worked: Array.isArray(args.what_worked) ? args.what_worked : [],
+        what_failed: Array.isArray(args.what_failed) ? args.what_failed : [],
+        open_questions: Array.isArray(args.open_questions) ? args.open_questions : [],
+        relevant_files: Array.isArray(args.relevant_files) ? args.relevant_files : [],
+        next_step: nextStep,
+      });
+      if (!created || created.ok !== true) {
+        return res.status(200).json(jsonRpcError(id, -32000, (created && created.error) || "Failed to create handoff."));
+      }
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify(created, null, 2) }],
+        }),
+      );
+    }
+
+    if (toolName === "claim_handoff") {
+      if (!requireScope("write:handoffs")) return;
+      const handoffId = String(args.handoff_id || "").trim();
+      if (!handoffId) {
+        return res.status(200).json(jsonRpcError(id, -32602, "handoff_id is required"));
+      }
+      const claimed = await claimHandoffWithAgentToken(
+        baseAuth.tokenHash,
+        handoffId,
+        args.claimer ? String(args.claimer).trim() : baseAuth.label,
+      );
+      if (!claimed || claimed.ok !== true) {
+        return res.status(200).json(jsonRpcError(id, -32009, (claimed && claimed.error) || "Unable to claim handoff."));
+      }
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify(claimed, null, 2) }],
+        }),
+      );
+    }
+
+    if (toolName === "remember_rule") {
+      if (!requireScope("write:memory")) return;
+      const title = String(args.title || "").trim();
+      const ruleText = String(args.rule_text || "").trim();
+      if (!title || !ruleText) {
+        return res.status(200).json(jsonRpcError(id, -32602, "title and rule_text are required"));
+      }
+      const saved = await rememberRuleWithAgentToken(baseAuth.tokenHash, {
+        title,
+        rule_text: ruleText,
+        kind: args.kind || "preference",
+        pattern: args.pattern || null,
+        target_domain: args.target_domain || null,
+        agent_name: baseAuth.label,
+      });
+      if (!saved || saved.ok !== true) {
+        return res.status(200).json(jsonRpcError(id, -32000, (saved && saved.error) || "Failed to save rule."));
+      }
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify(saved, null, 2) }],
+        }),
+      );
+    }
+
+    if (toolName === "get_wiki_page") {
+      if (!requireScope("read:projects")) return;
+      const brain = await loadSecondBrainWithAgentToken(baseAuth.tokenHash, "read:projects");
+      const slug = args.slug ? String(args.slug).trim().toLowerCase() : "";
+      const pages = slug
+        ? brain.wikiPages.filter((w) => String(w.slug || "").toLowerCase() === slug)
+        : brain.wikiPages;
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify({ total: pages.length, pages }, null, 2) }],
+        }),
+      );
+    }
+
+    if (toolName === "upsert_wiki_page") {
+      if (!requireScope("write:memory")) return;
+      const slug = String(args.slug || "").trim();
+      const title = String(args.title || "").trim();
+      const compiled = String(args.compiled_truth_md || "").trim();
+      if (!slug || !title || !compiled) {
+        return res.status(200).json(jsonRpcError(id, -32602, "slug, title, and compiled_truth_md are required"));
+      }
+      const saved = await upsertWikiPageWithAgentToken(baseAuth.tokenHash, {
+        slug,
+        title,
+        domain: args.domain || title,
+        compiled_truth_md: compiled,
+        replaced_because: args.replaced_because || `Updated by ${baseAuth.label}`,
+        contradictions: Array.isArray(args.contradictions) ? args.contradictions : [],
+        source_idea_ids: Array.isArray(args.source_idea_ids) ? args.source_idea_ids : [],
+      });
+      if (!saved || saved.ok !== true) {
+        return res.status(200).json(jsonRpcError(id, -32000, (saved && saved.error) || "Failed to update wiki page."));
+      }
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify(saved, null, 2) }],
         }),
       );
     }

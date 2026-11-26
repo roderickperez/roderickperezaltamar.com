@@ -1,14 +1,31 @@
 const crypto = require("crypto");
 
-const ALLOWED_SCOPES = ["read:ideas", "read:projects", "read:graph", "write:ideas"];
+const ALLOWED_SCOPES = [
+  "read:ideas",
+  "read:projects",
+  "read:graph",
+  "write:ideas",
+  "write:memory",
+  "write:handoffs",
+];
 const DEFAULT_CATEGORIES = [
-  "Subsurface & Wells",
-  "AI, Agents & ML",
-  "Energy & Climate",
-  "Digital Twins & 3D Viz",
-  "Seismic & Geophysics",
-  "Python & Dev Tools",
-  "Papers & Algorithms",
+  "TiefWerk",
+  "TiefWerk / Kosmos",
+  "TiefWerk / Otto",
+  "TiefWerk / Scout",
+  "TiefWerk / Bauen",
+  "TiefWerk / Extract",
+  "TiefWerk / Welt",
+  "TiefWerk / Stratum",
+  "TiefWerk / Automata",
+  "HandSchrift",
+  "DominoLab",
+  "OMV",
+  "Papers",
+  "Thesis",
+  "Conferences",
+  "Travel",
+  "Books",
 ];
 const SOURCE_PLATFORMS = [
   "LinkedIn",
@@ -512,6 +529,249 @@ async function classifyIdeaWithServerDecisionModel({
   };
 }
 
+async function callAgentSecondBrainRpc(rpcName, payload) {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !key) {
+    return { ok: false, status: 503, error: "Supabase backend not configured." };
+  }
+  try {
+    const res = await fetch(`${url}/rest/v1/rpc/${rpcName}`, {
+      method: "POST",
+      headers: {
+        apikey: key,
+        Authorization: "Bearer " + key,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      return {
+        ok: false,
+        status: res.status === 404 ? 501 : 503,
+        error:
+          res.status === 404
+            ? "Second-brain Supabase tables not initialized yet. Run supabase/workbench_second_brain.sql."
+            : `Second-brain RPC ${rpcName} failed (HTTP ${res.status}).`,
+      };
+    }
+    return await res.json();
+  } catch (_) {
+    return { ok: false, status: 503, error: `Second-brain RPC ${rpcName} unreachable.` };
+  }
+}
+
+async function loadSecondBrainWithAgentToken(tokenHash, requiredScope = "read:ideas") {
+  const res = await callAgentSecondBrainRpc("agent_get_second_brain", {
+    p_token_hash: tokenHash,
+    p_required_scope: requiredScope,
+  });
+  if (!res || res.ok !== true) {
+    return {
+      ok: false,
+      tablesMissing: res && res.status === 501,
+      status: (res && res.status) || 503,
+      error: (res && res.error) || "Second-brain store unavailable.",
+      rules: [],
+      wikiPages: [],
+      handoffs: [],
+    };
+  }
+  return {
+    ok: true,
+    tablesMissing: false,
+    rules: Array.isArray(res.rules) ? res.rules : [],
+    wikiPages: Array.isArray(res.wiki_pages) ? res.wiki_pages : [],
+    handoffs: Array.isArray(res.handoffs) ? res.handoffs : [],
+  };
+}
+
+function createHandoffWithAgentToken(tokenHash, handoff) {
+  return callAgentSecondBrainRpc("agent_create_handoff", {
+    p_token_hash: tokenHash,
+    p_handoff: handoff,
+  });
+}
+
+function claimHandoffWithAgentToken(tokenHash, handoffId, claimer) {
+  return callAgentSecondBrainRpc("agent_claim_handoff", {
+    p_token_hash: tokenHash,
+    p_handoff_id: handoffId,
+    p_claimer: claimer || null,
+  });
+}
+
+function rememberRuleWithAgentToken(tokenHash, rule) {
+  return callAgentSecondBrainRpc("agent_remember_rule", {
+    p_token_hash: tokenHash,
+    p_rule: rule,
+  });
+}
+
+function upsertWikiPageWithAgentToken(tokenHash, page) {
+  return callAgentSecondBrainRpc("agent_upsert_wiki_page", {
+    p_token_hash: tokenHash,
+    p_page: page,
+  });
+}
+
+function tokenizeQuery(text) {
+  return String(text || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/g)
+    .filter((t) => t.length >= 2);
+}
+
+/**
+ * GBrain-inspired hybrid Reciprocal Rank Fusion (RRF) search combining
+ * exact phrase match, BM25-style token overlap, recency, and access-weighted retention.
+ */
+function hybridRankIdeas(ideas, query, limit = 20) {
+  const qRaw = String(query || "").trim().toLowerCase();
+  const terms = tokenizeQuery(qRaw);
+  const nowMs = Date.now();
+
+  if (terms.length === 0) {
+    return [...ideas]
+      .sort((a, b) => {
+        const rankDiff = (Number(b.dailyRankScore) || 0) - (Number(a.dailyRankScore) || 0);
+        if (rankDiff !== 0) return rankDiff;
+        return (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0);
+      })
+      .slice(0, limit);
+  }
+
+  const scored = [];
+  for (const item of ideas) {
+    const title = getDisplayTitle(item).toLowerCase();
+    const domain = String(item.domain || "").toLowerCase();
+    const labels = (Array.isArray(item.gmailLabels) ? item.gmailLabels : []).join(" ").toLowerCase();
+    const tags = (Array.isArray(item.aiTags) ? item.aiTags : []).join(" ").toLowerCase();
+    const body = [item.snippet, item.notes, item.aiSummary, ...(item.urls || [])]
+      .join(" ")
+      .toLowerCase();
+
+    let lexicalScore = 0;
+    if (title.includes(qRaw)) lexicalScore += 14;
+    if (domain.includes(qRaw) || labels.includes(qRaw)) lexicalScore += 10;
+    if (body.includes(qRaw)) lexicalScore += 6;
+
+    let matchedTerms = 0;
+    for (const term of terms) {
+      let hit = false;
+      if (title.includes(term)) {
+        lexicalScore += 5;
+        hit = true;
+      }
+      if (domain.includes(term) || labels.includes(term) || tags.includes(term)) {
+        lexicalScore += 4;
+        hit = true;
+      }
+      if (body.includes(term)) {
+        lexicalScore += 2;
+        hit = true;
+      }
+      if (hit) matchedTerms += 1;
+    }
+
+    if (lexicalScore <= 0) continue;
+
+    const coverageBonus = (matchedTerms / terms.length) * 6;
+    const ageDays = Math.max(0, (nowMs - (Date.parse(item.date) || nowMs)) / 86400000);
+    const recencyBoost = Math.max(0, 4 - ageDays / 30);
+    const accessBoost = Math.min(4, Math.log1p(Number(item.accessCount) || 0) * 1.6);
+    const priorityBoost = ((Number(item.dailyRankScore) || 50) / 100) * 3;
+    const totalScore = lexicalScore + coverageBonus + recencyBoost + accessBoost + priorityBoost;
+
+    scored.push({ item, score: totalScore });
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map((entry) => entry.item);
+}
+
+function toSlug(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function buildContextPack({ query, projectSlug, ideas, projects, rules, wikiPages, handoffs }) {
+  const activeRules = (rules || []).filter((r) => r.status !== "retired");
+  const profileRules = activeRules.filter((r) => r.kind === "profile");
+  const routingRules = activeRules.filter((r) => r.kind !== "profile" && r.status === "confirmed");
+
+  const slugFilter = toSlug(projectSlug);
+  const openHandoffs = (handoffs || []).filter(
+    (h) => h.status === "open" && (!slugFilter || toSlug(h.project_slug).includes(slugFilter)),
+  );
+
+  const matchingWiki = (wikiPages || [])
+    .filter((w) => {
+      if (slugFilter && !toSlug(w.slug).includes(slugFilter) && !toSlug(w.domain).includes(slugFilter)) {
+        return false;
+      }
+      if (query) {
+        const hay = `${w.title} ${w.domain} ${w.compiled_truth_md}`.toLowerCase();
+        return tokenizeQuery(query).some((t) => hay.includes(t));
+      }
+      return true;
+    })
+    .slice(0, 6)
+    .map((w) => ({
+      slug: w.slug,
+      title: w.title,
+      domain: w.domain,
+      compiledTruth: w.compiled_truth_md,
+      lastVerifiedAt: w.last_verified_at || null,
+      contradictions: Array.isArray(w.contradictions) ? w.contradictions : [],
+    }));
+
+  const selfIdeas = (ideas || []).filter((i) => i.isSelfSent !== false);
+  const topIdeas = hybridRankIdeas(
+    slugFilter
+      ? selfIdeas.filter((i) => toSlug(i.domain).includes(slugFilter))
+      : selfIdeas,
+    query || "",
+    12,
+  ).map(sanitizeIdeaForAgent);
+
+  const relevantProjects = (projects || [])
+    .filter((p) => !slugFilter || toSlug(p.title).includes(slugFilter) || toSlug(p.domain).includes(slugFilter))
+    .slice(0, 8)
+    .map((p) => ({
+      id: p.id,
+      title: p.title,
+      domain: p.domain,
+      effortTier: p.effortTier,
+      priorityScore: p.priorityScore,
+      objective: p.objective,
+      mvpScope: p.mvpScope,
+      linkedCount: Array.isArray(p.ideaIds) ? p.ideaIds.length : 0,
+    }));
+
+  return {
+    owner: "Roderick Perez Altamar",
+    canonicalProjects: DEFAULT_CATEGORIES,
+    profile: profileRules.map((r) => ({ title: r.title, rule: r.rule_text, locked: Boolean(r.human_locked) })),
+    confirmedRules: routingRules.slice(0, 20).map((r) => ({
+      id: r.id,
+      title: r.title,
+      rule: r.rule_text,
+      pattern: r.pattern || null,
+      targetDomain: r.target_domain || null,
+      confidence: Number(r.confidence || 0.8),
+      humanLocked: Boolean(r.human_locked),
+    })),
+    openHandoffs: openHandoffs.slice(0, 8),
+    wikiPages: matchingWiki,
+    projects: relevantProjects,
+    topIdeas,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 module.exports = {
   ALLOWED_SCOPES,
   DEFAULT_CATEGORIES,
@@ -522,6 +782,13 @@ module.exports = {
   extractBearerToken,
   verifyAgentTokenAndLoad,
   appendIdeaWithAgentToken,
+  loadSecondBrainWithAgentToken,
+  createHandoffWithAgentToken,
+  claimHandoffWithAgentToken,
+  rememberRuleWithAgentToken,
+  upsertWikiPageWithAgentToken,
+  hybridRankIdeas,
+  buildContextPack,
   getDisplayTitle,
   sanitizeIdeaForAgent,
   buildKnowledgeGraphSummary,

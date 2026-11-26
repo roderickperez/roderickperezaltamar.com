@@ -1,8 +1,13 @@
 const {
   appendIdeaWithAgentToken,
+  buildContextPack,
   buildKnowledgeGraphSummary,
+  claimHandoffWithAgentToken,
   classifyIdeaWithServerDecisionModel,
-  getDisplayTitle,
+  createHandoffWithAgentToken,
+  hybridRankIdeas,
+  loadSecondBrainWithAgentToken,
+  rememberRuleWithAgentToken,
   sanitizeIdeaForAgent,
   verifyAgentTokenAndLoad,
 } = require("./_workbench-lib");
@@ -93,6 +98,38 @@ function buildOpenApiSpec(host) {
           responses: { "200": { description: "Knowledge graph connections" } },
         },
       },
+      "/api/workbench-agent/context-pack": {
+        get: {
+          operationId: "getAgentContextPack",
+          summary: "One-call starter brief: profile, confirmed rules, open cross-agent handoffs, wiki summaries, and top priority emails",
+          parameters: [
+            { name: "q", in: "query", schema: { type: "string" } },
+            { name: "project", in: "query", schema: { type: "string" } },
+          ],
+          responses: { "200": { description: "Unified context pack JSON" } },
+        },
+      },
+      "/api/workbench-agent/handoffs": {
+        post: {
+          operationId: "createAgentHandoff",
+          summary: "Create a typed cross-agent handoff card for another AI tool",
+          responses: { "201": { description: "Handoff created" } },
+        },
+      },
+      "/api/workbench-agent/handoffs/claim": {
+        post: {
+          operationId: "claimAgentHandoff",
+          summary: "Atomically claim an open handoff once",
+          responses: { "200": { description: "Handoff claimed" } },
+        },
+      },
+      "/api/workbench-agent/rules": {
+        post: {
+          operationId: "rememberRule",
+          summary: "Save a working preference or routing rule (respects human-locked rules)",
+          responses: { "200": { description: "Rule saved" } },
+        },
+      },
     },
   };
 }
@@ -114,7 +151,8 @@ module.exports = async function (req, res) {
       ? "read:projects"
       : route === "graph"
         ? "read:graph"
-        : route === "ideas" && req.method === "POST"
+        : (route === "ideas" || route === "handoffs" || route === "handoffs/claim" || route === "rules") &&
+            req.method === "POST"
           ? "write:ideas"
           : "read:ideas";
 
@@ -140,37 +178,83 @@ module.exports = async function (req, res) {
       });
     }
 
+    if (req.method === "GET" && route === "context-pack") {
+      const brain = await loadSecondBrainWithAgentToken(auth.tokenHash, "read:ideas");
+      const pack = buildContextPack({
+        query: req.query.q ? String(req.query.q) : "",
+        projectSlug: req.query.project ? String(req.query.project) : "",
+        ideas: auth.ideas,
+        projects: auth.projects,
+        rules: brain.rules,
+        wikiPages: brain.wikiPages,
+        handoffs: brain.handoffs,
+      });
+      return res.status(200).json(pack);
+    }
+
     if (req.method === "GET" && route === "ideas") {
-      const q = req.query.q ? String(req.query.q).toLowerCase() : "";
+      const q = req.query.q ? String(req.query.q) : "";
       const domain = req.query.domain ? String(req.query.domain).toLowerCase() : "";
       const platform = req.query.platform ? String(req.query.platform).toLowerCase() : "";
       const stage = req.query.stage ? String(req.query.stage) : "";
       const limit = Math.max(1, Math.min(60, Number(req.query.limit || 25)));
 
-      const matches = auth.ideas
-        .filter((item) => {
-          if (domain && String(item.domain || "").toLowerCase() !== domain) return false;
-          if (platform && String(item.platform || "").toLowerCase() !== platform) return false;
-          if (stage && item.column !== stage) return false;
-          if (q) {
-            const hay = [
-              getDisplayTitle(item),
-              item.snippet,
-              item.notes,
-              item.aiSummary,
-              item.domain,
-              ...(item.aiTags || []),
-            ]
-              .join(" ")
-              .toLowerCase();
-            if (!hay.includes(q)) return false;
-          }
-          return true;
-        })
-        .slice(0, limit)
-        .map(sanitizeIdeaForAgent);
+      const prefiltered = auth.ideas.filter((item) => {
+        if (item.isSelfSent === false) return false;
+        if (domain && String(item.domain || "").toLowerCase() !== domain) return false;
+        if (platform && String(item.platform || "").toLowerCase() !== platform) return false;
+        if (stage && item.column !== stage) return false;
+        return true;
+      });
+      const matches = hybridRankIdeas(prefiltered, q, limit).map(sanitizeIdeaForAgent);
 
       return res.status(200).json({ total: matches.length, ideas: matches });
+    }
+
+    if (req.method === "POST" && route === "handoffs") {
+      const body = req.body || {};
+      const title = String(body.title || "").trim();
+      const summary = String(body.summary || "").trim();
+      const nextStep = String(body.next_step || body.nextStep || "").trim();
+      if (!title || !summary || !nextStep) {
+        return res.status(400).json({ error: "title, summary, and next_step are required" });
+      }
+      const created = await createHandoffWithAgentToken(auth.tokenHash, {
+        project_slug: String(body.project_slug || body.projectSlug || "general"),
+        title,
+        from_agent: String(body.from_agent || auth.label || "agent"),
+        summary,
+        what_worked: Array.isArray(body.what_worked) ? body.what_worked : [],
+        what_failed: Array.isArray(body.what_failed) ? body.what_failed : [],
+        open_questions: Array.isArray(body.open_questions) ? body.open_questions : [],
+        relevant_files: Array.isArray(body.relevant_files) ? body.relevant_files : [],
+        next_step: nextStep,
+      });
+      return res.status(created && created.ok ? 201 : (created && created.status) || 502).json(created);
+    }
+
+    if (req.method === "POST" && route === "handoffs/claim") {
+      const body = req.body || {};
+      const handoffId = String(body.handoff_id || body.handoffId || "").trim();
+      if (!handoffId) return res.status(400).json({ error: "handoff_id is required" });
+      const claimed = await claimHandoffWithAgentToken(auth.tokenHash, handoffId, body.claimer || auth.label);
+      return res.status(claimed && claimed.ok ? 200 : (claimed && claimed.status) || 409).json(claimed);
+    }
+
+    if (req.method === "POST" && route === "rules") {
+      const body = req.body || {};
+      const title = String(body.title || "").trim();
+      const ruleText = String(body.rule_text || body.ruleText || "").trim();
+      if (!title || !ruleText) return res.status(400).json({ error: "title and rule_text are required" });
+      const saved = await rememberRuleWithAgentToken(auth.tokenHash, {
+        title,
+        rule_text: ruleText,
+        kind: body.kind || "preference",
+        pattern: body.pattern || null,
+        target_domain: body.target_domain || body.targetDomain || null,
+        agent_name: auth.label,
+      });
+      return res.status(saved && saved.ok ? 200 : (saved && saved.status) || 409).json(saved);
     }
 
     if (req.method === "GET" && route === "projects") {
