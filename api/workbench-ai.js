@@ -77,7 +77,7 @@ function decodeHtmlEntities(str) {
 async function fetchSingleLinkPreview(url) {
   if (!isSafePublicHttpUrl(url)) return null;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 2200);
+  const timer = setTimeout(() => controller.abort(), 1400);
   try {
     const parsed = new URL(url);
     const host = parsed.hostname.toLowerCase();
