@@ -226,22 +226,37 @@ module.exports = async function (req, res) {
 
     if (action === "triage_batch") {
       const rawItems = Array.isArray(body.items) ? body.items.slice(0, 30) : [];
+      const customProjects = Array.isArray(body.customProjects) ? body.customProjects.slice(0, 40) : [];
+      const customPromptBlock =
+        customProjects.length > 0
+          ? [
+              "User-Defined Custom Projects & Labels (HONOR THESE EQUALLY with canonical projects):",
+              ...customProjects.map((cp) =>
+                typeof cp === "string"
+                  ? `  - ${cp}`
+                  : `  - ${cp.name}${cp.description ? ` (${cp.description})` : ""}`,
+              ),
+            ].join("\n")
+          : "";
       const items = await enrichItemsWithLinkPreviews(rawItems);
       const todayIso = new Date().toISOString().slice(0, 10);
       const prompt = [
         `Today is ${todayIso}. Classify and deeply analyze each saved email bookmark for Roderick Perez Altamar.`,
-        "1. Assign exact platform (" + SOURCE_PLATFORMS.join(", ") + ") and domain (prefer his canonical projects/subdivisions below and honor existing gmailLabels as #1 guideline).",
+        "1. Assign exact platform (" + SOURCE_PLATFORMS.join(", ") + ") and domain (honor existing gmailLabels as #1 guideline, then match User-Defined Custom Projects & Canonical Projects below). DO NOT over-assign TiefWerk: use TiefWerk/* ONLY for TiefWerk product/module items; route general AI, OMV, Seismic, Papers, Thesis, Personal, Books, Conferences, Travel, HandSchrift, DominoLab, or user custom projects to their own domains!",
         "2. Use linkPreview (when present), URLs, subject, snippet, and bodyPreview to produce a crisp suggestedTitle (max 75 chars) and oneLineSummary (max 150 chars).",
         "3. Extract dueDate in YYYY-MM-DD ONLY if an explicit deadline, event/conference/travel date, or submission date is mentioned; otherwise empty string ''.",
         "4. Assign suggestedColumn: 'to_deep_dive' if high-value/actionable or has an upcoming deadline, 'processed_archived' if obsolete/noise, else 'inbox_backlog'.",
         "5. Provide connectionNote (max 140 chars): note how this idea connects to or partially overlaps with another project/module/topic in Roderick's portfolio.",
         "6. Provide 3-6 concise lowercase concept tags for the 3D Knowledge Graph.",
         "Output ONLY a raw JSON array (one object per input item, preserving exact `id`) with keys: id, platform, domain, isUntitled (boolean), suggestedTitle, oneLineSummary, tags (string[]), dueDate, suggestedColumn, connectionNote.",
+        customPromptBlock,
         "Canonical Projects:",
         CANONICAL_PROJECTS_PROMPT,
         "Items:",
         JSON.stringify(items),
-      ].join("\n");
+      ]
+        .filter(Boolean)
+        .join("\n");
       const { value: result, usedModel } = await callGeminiGenerateJsonWithMeta(
         apiKey,
         body.model || "gemini-4-hydrogen",
@@ -286,11 +301,24 @@ module.exports = async function (req, res) {
 
     if (action === "synthesize_projects") {
       const manifest = Array.isArray(body.manifest) ? body.manifest.slice(0, 250) : [];
+      const customProjects = Array.isArray(body.customProjects) ? body.customProjects.slice(0, 40) : [];
+      const customPromptBlock =
+        customProjects.length > 0
+          ? [
+              "User-Defined Custom Projects & Labels (MUST include clusters for any of these that match emails):",
+              ...customProjects.map((cp) =>
+                typeof cp === "string"
+                  ? `  - ${cp}`
+                  : `  - ${cp.name}${cp.description ? ` (${cp.description})` : ""}`,
+              ),
+            ].join("\n")
+          : "";
       const todayIso = new Date().toISOString().slice(0, 10);
       const prompt = [
-        `Today is ${todayIso}. Cluster ALL of Roderick Perez Altamar's self-sent emails into comprehensive, cohesive Projects and Subprojects using his canonical taxonomy and existing gmailLabels as primary guidelines.`,
-        "CRITICAL COVERAGE RULE: Do NOT stop at 3 projects! Create a distinct project or subproject entry for EVERY active domain/topic in the manifest that has 2+ matching emails (typically 6-16 total across TiefWerk subdivisions AND standalone projects like OMV, AI & Agents, Seismic & Subsurface, HandSchrift, DominoLab, Papers, Thesis, Conferences, Personal, Books, Travel). Aim to assign 80%+ of all input ideaIds.",
-        "PARENT / SUBPROJECT HIERARCHY: For subdivisions like `TiefWerk / Scout`, `TiefWerk / Extract`, `TiefWerk / Bauen`, `TiefWerk / Kosmos`, `TiefWerk / Otto`, `TiefWerk / Welt`, `TiefWerk / Stratum`, `TiefWerk / Automata`, set `parentProject: \"TiefWerk\"` and `domain: \"TiefWerk / <Subproject>\"`. For standalone projects (`OMV`, `AI & Agents`, `Seismic & Subsurface`, `Papers`, `Thesis`, `HandSchrift`, `DominoLab`, `Personal`, `Conferences`, `Books`, `Travel`), set `parentProject: \"\"` (or group sub-initiatives under a clear parent if applicable).",
+        `Today is ${todayIso}. Cluster ALL of Roderick Perez Altamar's self-sent emails into comprehensive, cohesive Projects and Subprojects using his User-Defined Custom Projects, Canonical Taxonomy, and existing gmailLabels.`,
+        "CRITICAL COVERAGE & BALANCE RULE: Do NOT stop at 3 projects and do NOT put everything into TiefWerk! Create distinct projects/subprojects across ALL active domains in the manifest (2+ matching emails each, typically 6-16 total across OMV, AI & Agents, Seismic & Subsurface, HandSchrift, DominoLab, Papers, Thesis, Conferences, Personal, Books, Travel, User-Defined Custom Projects, AND TiefWerk subdivisions). Aim to assign 80%+ of all input ideaIds.",
+        "PARENT / SUBPROJECT HIERARCHY: Whenever a project has subdivisions (`Parent / Subproject`, e.g. `TiefWerk / Scout`, `OMV / Wells`, `Personal / Finance`), set `parentProject: \"Parent\"` and `domain: \"Parent / Subproject\"`. For standalone projects (`OMV`, `AI & Agents`, `Seismic & Subsurface`, `Papers`, `Thesis`, `HandSchrift`, `DominoLab`, `Personal`, `Conferences`, `Books`, `Travel`), set `parentProject: \"\"`.",
+        customPromptBlock,
         "Canonical Projects:",
         CANONICAL_PROJECTS_PROMPT,
         "Output ONLY a raw JSON object with keys `projects` (array) and `suggestedTodos` (array).",
@@ -298,7 +326,9 @@ module.exports = async function (req, res) {
         "Each suggestedTodo (up to 6 concrete prioritized tasks) MUST have: title, domain, priority ('high'|'medium'|'low'), dueDate (YYYY-MM-DD or ''), reason, linkedIdeaId.",
         "Ideas:",
         JSON.stringify(manifest),
-      ].join("\n");
+      ]
+        .filter(Boolean)
+        .join("\n");
       const { value: result, usedModel } = await callGeminiGenerateJsonWithMeta(
         apiKey,
         body.model || "gemini-4-hydrogen",
