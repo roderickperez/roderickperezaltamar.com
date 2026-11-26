@@ -288,11 +288,13 @@ module.exports = async function (req, res) {
       const manifest = Array.isArray(body.manifest) ? body.manifest.slice(0, 250) : [];
       const todayIso = new Date().toISOString().slice(0, 10);
       const prompt = [
-        `Today is ${todayIso}. Cluster Roderick Perez Altamar's self-sent emails into cohesive, actionable projects using his canonical projects/subdivisions and existing gmailLabels as primary guidelines.`,
+        `Today is ${todayIso}. Cluster ALL of Roderick Perez Altamar's self-sent emails into comprehensive, cohesive Projects and Subprojects using his canonical taxonomy and existing gmailLabels as primary guidelines.`,
+        "CRITICAL COVERAGE RULE: Do NOT stop at 3 projects! Create a distinct project or subproject entry for EVERY active domain/topic in the manifest that has 2+ matching emails (typically 6-16 total across TiefWerk subdivisions AND standalone projects like OMV, AI & Agents, Seismic & Subsurface, HandSchrift, DominoLab, Papers, Thesis, Conferences, Personal, Books, Travel). Aim to assign 80%+ of all input ideaIds.",
+        "PARENT / SUBPROJECT HIERARCHY: For subdivisions like `TiefWerk / Scout`, `TiefWerk / Extract`, `TiefWerk / Bauen`, `TiefWerk / Kosmos`, `TiefWerk / Otto`, `TiefWerk / Welt`, `TiefWerk / Stratum`, `TiefWerk / Automata`, set `parentProject: \"TiefWerk\"` and `domain: \"TiefWerk / <Subproject>\"`. For standalone projects (`OMV`, `AI & Agents`, `Seismic & Subsurface`, `Papers`, `Thesis`, `HandSchrift`, `DominoLab`, `Personal`, `Conferences`, `Books`, `Travel`), set `parentProject: \"\"` (or group sub-initiatives under a clear parent if applicable).",
         "Canonical Projects:",
         CANONICAL_PROJECTS_PROMPT,
         "Output ONLY a raw JSON object with keys `projects` (array) and `suggestedTodos` (array).",
-        "Each project MUST have: title, objective, whyItMatters, domain, mvpScope, techStack (2-6 strings), effortTier (" + EFFORT_TIERS.join(" | ") + "), checklist (3-5 concrete execution steps), ideaIds (matching input IDs), priorityScore (1-100), dueDate (YYYY-MM-DD or ''), synergyNotes, relatedProjectTitles (string[]).",
+        "Each project MUST have: title, parentProject (string, e.g. 'TiefWerk' or ''), objective, whyItMatters, domain, mvpScope, techStack (2-6 strings), effortTier (" + EFFORT_TIERS.join(" | ") + "), checklist (3-5 concrete execution steps), ideaIds (matching input IDs), priorityScore (1-100), dueDate (YYYY-MM-DD or ''), synergyNotes, relatedProjectTitles (string[]).",
         "Each suggestedTodo (up to 6 concrete prioritized tasks) MUST have: title, domain, priority ('high'|'medium'|'low'), dueDate (YYYY-MM-DD or ''), reason, linkedIdeaId.",
         "Ideas:",
         JSON.stringify(manifest),
