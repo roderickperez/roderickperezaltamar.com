@@ -26,7 +26,7 @@ const CANONICAL_PROJECTS_PROMPT = [
   "Seismic & Subsurface (general seismic interpretation, geophysics, petrophysics, reservoir workflows)",
   "Personal (personal life, finance, health, family, home, private notes)",
   "Papers (academic papers, arXiv, OnePetro, SPE/SEG preprints)",
-  "Thesis (thesis research, dissertation, university milestones)",
+  "Thesis (thesis research, dissertation, university milestones, roderickperez@ou.edu)",
   "Conferences (EAGE, SEG, SPE, workshops, abstracts, talks)",
   "Travel (flights, hotels, itineraries, trips)",
   "Books (books, Kindle, reading list, notes)",

@@ -41,6 +41,7 @@ const DECISIONS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/dec
 const DEFAULT_OWNER_EMAILS = [
   "roderickperezaltamar@gmail.com",
   "roderick.perezaltamar@omv.com",
+  "roderickperez@ou.edu",
 ];
 
 // In-memory sliding-window rate limiter & auth-failure lockout per IP
