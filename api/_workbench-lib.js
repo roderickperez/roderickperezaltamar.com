@@ -471,28 +471,54 @@ function buildKnowledgeGraphSummary(ideas, projects, filter = {}) {
   };
 }
 
-async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-    model || "gemini-2.5-flash",
-  )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+const DEFAULT_GEMINI_MODEL = "gemini-4-hydrogen";
+const FALLBACK_GEMINI_MODEL = "gemini-3.8-flash";
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseMimeType: "application/json",
-        ...(responseSchema ? { responseSchema } : {}),
-      },
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(`Gemini API HTTP ${res.status}: ${(await res.text()).slice(0, 240)}`);
+function resolveActiveGeminiModel(rawModel) {
+  const clean = String(rawModel || "").trim();
+  if (!clean || /^gemini-(1\.5|2\.0|2\.5)-/i.test(clean)) {
+    return DEFAULT_GEMINI_MODEL;
   }
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-  return JSON.parse(text);
+  return clean;
+}
+
+async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
+  const primaryModel = resolveActiveGeminiModel(model);
+  const tryModels =
+    primaryModel === FALLBACK_GEMINI_MODEL
+      ? [primaryModel]
+      : [primaryModel, FALLBACK_GEMINI_MODEL];
+
+  let lastErrorText = "";
+  for (const targetModel of tryModels) {
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      targetModel,
+    )}:generateContent?key=${encodeURIComponent(apiKey)}`;
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          ...(responseSchema ? { responseSchema } : {}),
+        },
+      }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+      return JSON.parse(text);
+    }
+    const errBody = (await res.text()).slice(0, 320);
+    lastErrorText = `Gemini API HTTP ${res.status}: ${errBody}`;
+    // Retry with fallback model ONLY on 404 model-unavailable errors
+    if (res.status !== 404) {
+      throw new Error(lastErrorText);
+    }
+  }
+  throw new Error(lastErrorText || "Gemini API request failed.");
 }
 
 async function classifyIdeaWithServerDecisionModel({
@@ -502,7 +528,7 @@ async function classifyIdeaWithServerDecisionModel({
   url,
   existingCategories = [],
   decisionModel = "gemini-decision-1",
-  flashModel = "gemini-2.5-flash",
+  flashModel = DEFAULT_GEMINI_MODEL,
   threshold = 0.62,
 }) {
   const categories = Array.from(

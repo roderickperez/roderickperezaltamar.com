@@ -193,7 +193,7 @@ module.exports = async function (req, res) {
     if (action === "test") {
       await callGeminiGenerateJson(
         apiKey,
-        body.model || "gemini-2.5-flash",
+        body.model || "gemini-4-hydrogen",
         'Reply with JSON {"status":"ok"}',
         {
           type: "OBJECT",
@@ -212,7 +212,7 @@ module.exports = async function (req, res) {
         url: body.url ? String(body.url) : undefined,
         existingCategories: Array.isArray(body.existingCategories) ? body.existingCategories : [],
         decisionModel: body.decisionModel || "gemini-decision-1",
-        flashModel: body.flashModel || "gemini-2.5-flash",
+        flashModel: body.flashModel || "gemini-4-hydrogen",
         threshold: typeof body.threshold === "number" ? body.threshold : 0.62,
       });
       return res.status(200).json({ ok: true, result });
@@ -235,7 +235,7 @@ module.exports = async function (req, res) {
         "Items:",
         JSON.stringify(items),
       ].join("\n");
-      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-2.5-flash", prompt, {
+      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-4-hydrogen", prompt, {
         type: "ARRAY",
         items: {
           type: "OBJECT",
@@ -277,7 +277,7 @@ module.exports = async function (req, res) {
         "Ideas:",
         JSON.stringify(manifest),
       ].join("\n");
-      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-2.5-pro", prompt, {
+      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-4-hydrogen", prompt, {
         type: "OBJECT",
         properties: {
           projects: {
@@ -340,7 +340,7 @@ module.exports = async function (req, res) {
 
     if (action === "compile_digest") {
       const prompt = `Compile an executive summary (2-3 crisp sentences) and the Top 3 "Execute This Week" quick wins from this snapshot and portfolio.\nInput:\n${JSON.stringify(body.context || {})}`;
-      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-2.5-flash", prompt, {
+      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-4-hydrogen", prompt, {
         type: "OBJECT",
         properties: {
           executiveSummary: { type: "STRING" },
@@ -367,7 +367,7 @@ module.exports = async function (req, res) {
 
     if (action === "rank_todos") {
       const prompt = `You are RPA! Workbench Executive Assistant for Roderick Perez Altamar.\n1. Rank every active To-Do (1-100) based on deadline urgency and project impact (${CANONICAL_PROJECTS_PROMPT.replace(/\n/g, "; ")}). Give a crisp <12-word reason.\n2. Suggest up to 3 concrete new To-Dos from topIdeas or project nextSteps not already in activeTodos.\nContext:\n${JSON.stringify(body.context || {})}`;
-      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-2.5-flash", prompt, {
+      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-4-hydrogen", prompt, {
         type: "OBJECT",
         properties: {
           rankings: {
