@@ -473,16 +473,17 @@ function buildKnowledgeGraphSummary(ideas, projects, filter = {}) {
 
 const DEFAULT_GEMINI_MODEL = "gemini-4-hydrogen";
 const STATIC_FALLBACK_GEMINI_MODELS = [
-  "gemini-4-argon",
-  "gemini-4-neon",
-  "gemini-3.8-flash",
   "gemini-3.7-flash",
+  "gemini-3.8-flash",
   "gemini-3.6-flash",
   "gemini-3-flash-preview",
   "gemini-3.5-flash-lite",
+  "gemini-4-argon",
+  "gemini-4-neon",
 ];
 
 let cachedDiscoveredModels = { keyHash: "", models: [], fetchedAt: 0 };
+let lastHealthyGeminiModel = { keyHash: "", model: "", at: 0 };
 
 function resolveActiveGeminiModel(rawModel) {
   const clean = String(rawModel || "").trim();
@@ -500,17 +501,18 @@ function scoreDiscoveredGeminiModel(name) {
   const n = name.toLowerCase();
   if (n === "gemini-4-hydrogen") return 100;
   if (n.includes("hydrogen")) return 96;
-  if (n === "gemini-4-argon") return 92;
-  if (n === "gemini-4-neon") return 90;
-  if (n === "gemini-4-carbon") return 86;
-  if (n.startsWith("gemini-4")) return 84;
-  if (n === "gemini-3.8-flash") return 80;
-  if (n === "gemini-3.7-flash") return 78;
-  if (n === "gemini-3.6-flash") return 76;
-  if (n === "gemini-3-flash-preview") return 74;
-  if (n.startsWith("gemini-3") && n.includes("flash") && !n.includes("lite")) return 72;
-  if (n.startsWith("gemini-3") && n.includes("pro")) return 68;
-  if (n.startsWith("gemini-3")) return 64;
+  // Prefer free-tier-friendly Flash pools ahead of paid-only Argon/Neon/Carbon when Hydrogen spikes
+  if (n === "gemini-3.7-flash") return 92;
+  if (n === "gemini-3.8-flash") return 90;
+  if (n === "gemini-3.6-flash") return 88;
+  if (n === "gemini-3-flash-preview") return 86;
+  if (n === "gemini-3.5-flash-lite") return 84;
+  if (n.startsWith("gemini-3") && n.includes("flash")) return 82;
+  if (n === "gemini-4-argon") return 70;
+  if (n === "gemini-4-neon") return 68;
+  if (n === "gemini-4-carbon") return 66;
+  if (n.startsWith("gemini-4")) return 64;
+  if (n.startsWith("gemini-3")) return 60;
   if (n.includes("flash")) return 40;
   return 20;
 }
@@ -558,7 +560,16 @@ async function discoverLiveGeminiModels(apiKey) {
 }
 
 async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
-  const primaryModel = resolveActiveGeminiModel(model);
+  const keyHash = sha256Hex(apiKey).slice(0, 16);
+  const requestedPrimary = resolveActiveGeminiModel(model);
+  const now = Date.now();
+  const stickyModel =
+    lastHealthyGeminiModel.keyHash === keyHash &&
+    lastHealthyGeminiModel.model &&
+    now - lastHealthyGeminiModel.at < 5 * 60_000
+      ? lastHealthyGeminiModel.model
+      : null;
+  const primaryModel = stickyModel || requestedPrimary;
   const attemptsLog = [];
 
   const attemptSingleModel = async (targetModel, retries) => {
@@ -568,7 +579,7 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 11000);
+      const timeoutId = setTimeout(() => controller.abort(), 28000);
       let res;
       try {
         res = await fetch(endpoint, {
@@ -597,6 +608,7 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
       if (res.ok) {
         const data = await res.json();
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+        lastHealthyGeminiModel = { keyHash, model: targetModel, at: Date.now() };
         return { ok: true, value: JSON.parse(text), usedModel: targetModel };
       }
 
@@ -619,16 +631,20 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
     return { ok: false, fatal: false, error: `Failed on ${targetModel}` };
   };
 
-  // 1. Try user's primary model first (gemini-4-hydrogen)
-  const first = await attemptSingleModel(primaryModel, 2);
+  // 1. Try primary (or recently proven healthy sticky model) first
+  const first = await attemptSingleModel(primaryModel, 1);
   if (first.ok) return first.value;
   if (first.fatal) throw new Error(first.error);
 
-  // 2. Discover live models actually enabled on this API key and combine with static fallbacks
+  // 2. Discover live models enabled on this API key & walk highest-priority free/paid pools
   const discovered = await discoverLiveGeminiModels(apiKey);
   const candidates = Array.from(
-    new Set([...discovered, ...STATIC_FALLBACK_GEMINI_MODELS].filter((m) => m !== primaryModel)),
-  ).slice(0, 6);
+    new Set(
+      [requestedPrimary, ...discovered, ...STATIC_FALLBACK_GEMINI_MODELS].filter(
+        (m) => m && m !== primaryModel,
+      ),
+    ),
+  ).slice(0, 7);
 
   let lastError = first.error;
   for (const candidate of candidates) {
