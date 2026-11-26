@@ -2,6 +2,9 @@
   "functions": {
     "api/workbench-asset.js": {
       "includeFiles": "private-workbench-dist/**"
+    },
+    "api/workbench-ai.js": {
+      "maxDuration": 60
     }
   },
   "rewrites": [

@@ -472,7 +472,12 @@ function buildKnowledgeGraphSummary(ideas, projects, filter = {}) {
 }
 
 const DEFAULT_GEMINI_MODEL = "gemini-4-hydrogen";
-const FALLBACK_GEMINI_MODELS = ["gemini-3.8-flash", "gemini-3.5-flash-lite"];
+const FALLBACK_GEMINI_MODELS = [
+  "gemini-4-argon",
+  "gemini-4-neon",
+  "gemini-3.8-flash",
+  "gemini-3.5-flash-lite",
+];
 
 function resolveActiveGeminiModel(rawModel) {
   const clean = String(rawModel || "").trim();
@@ -496,19 +501,35 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
       targetModel,
     )}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-    const maxAttempts = targetModel === primaryModel ? 2 : 2;
+    const maxAttempts = targetModel === primaryModel ? 2 : 1;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            responseMimeType: "application/json",
-            ...(responseSchema ? { responseSchema } : {}),
-          },
-        }),
-      });
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 14000);
+      let res;
+      try {
+        res = await fetch(endpoint, {
+          method: "POST",
+          signal: controller.signal,
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              ...(responseSchema ? { responseSchema } : {}),
+            },
+          }),
+        });
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        lastErrorText = `Gemini API timeout/network (${targetModel}): ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`;
+        if (attempt < maxAttempts) {
+          await sleepMs(800);
+          continue;
+        }
+        break;
+      }
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const data = await res.json();
         const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
@@ -518,13 +539,13 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
       const errBody = (await res.text()).slice(0, 320);
       lastErrorText = `Gemini API HTTP ${res.status} (${targetModel}): ${errBody}`;
 
-      // Transient overload / rate-limit: brief retry, then fall back to next healthy model
+      // Transient overload / rate-limit: brief retry on primary, then immediately try next model pool
       if (res.status === 503 || res.status === 429 || res.status === 500 || res.status === 502) {
         if (attempt < maxAttempts) {
-          await sleepMs(1200 * attempt);
+          await sleepMs(800);
           continue;
         }
-        break; // Move on to fallback model
+        break;
       }
       // 404 model unavailable: immediately try next fallback model
       if (res.status === 404) {
