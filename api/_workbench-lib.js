@@ -567,10 +567,10 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
       ? lastHealthyGeminiModel.model
       : null;
   const primaryModel = stickyModel || requestedPrimary;
-  const overallDeadline = Date.now() + 42_000;
+  const overallDeadline = Date.now() + 52_000;
   const attemptsLog = [];
 
-  const attemptSingleModel = async (targetModel, retries) => {
+  const attemptSingleModel = async (targetModel, retries, maxSingleMs) => {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
       targetModel,
     )}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -584,10 +584,10 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
       const remaining = overallDeadline - Date.now();
-      if (remaining < 3500) {
+      if (remaining < 4000) {
         return { ok: false, fatal: false, error: `Server time budget reached before ${targetModel}` };
       }
-      const perAttemptMs = Math.min(18_000, remaining - 1500);
+      const perAttemptMs = Math.min(maxSingleMs, remaining - 1500);
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), perAttemptMs);
       let res;
@@ -614,9 +614,18 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
 
       if (res.ok) {
         const data = await res.json();
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
+        const parts = Array.isArray(data?.candidates?.[0]?.content?.parts)
+          ? data.candidates[0].content.parts
+          : [];
+        const answerPart = [...parts].reverse().find((p) => p && !p.thought && typeof p.text === "string" && p.text.trim());
+        const rawText = (answerPart?.text || parts[0]?.text || "{}")
+          .trim()
+          .replace(/^```json\s*/i, "")
+          .replace(/^```\s*/i, "")
+          .replace(/```$/i, "")
+          .trim();
         lastHealthyGeminiModel = { keyHash, model: targetModel, at: Date.now() };
-        return { ok: true, value: JSON.parse(text), usedModel: targetModel };
+        return { ok: true, value: JSON.parse(rawText), usedModel: targetModel };
       }
 
       const errBody = (await res.text()).slice(0, 260);
@@ -638,12 +647,12 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
     return { ok: false, fatal: false, error: `Failed on ${targetModel}` };
   };
 
-  // 1. Try primary (or recently proven healthy sticky model) first
-  const first = await attemptSingleModel(primaryModel, 1);
+  // 1. Give primary (gemini-4-hydrogen) a generous 34s window so thinking+JSON finishes cleanly
+  const first = await attemptSingleModel(primaryModel, 1, 34_000);
   if (first.ok) return first.value;
   if (first.fatal) throw new Error(first.error);
 
-  // 2. Discover live models enabled on this API key & walk highest-priority free/paid pools
+  // 2. Discover live models enabled on this API key & walk highest-priority fallback pools
   const discovered = await discoverLiveGeminiModels(apiKey);
   const candidates = Array.from(
     new Set(
@@ -651,11 +660,11 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
         (m) => m && m !== primaryModel,
       ),
     ),
-  ).slice(0, 7);
+  ).slice(0, 6);
 
   let lastError = first.error;
   for (const candidate of candidates) {
-    const res = await attemptSingleModel(candidate, 1);
+    const res = await attemptSingleModel(candidate, 1, 16_000);
     if (res.ok) return res.value;
     if (res.fatal) throw new Error(res.error);
     lastError = res.error;
