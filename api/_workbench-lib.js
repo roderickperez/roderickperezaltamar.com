@@ -473,13 +473,12 @@ function buildKnowledgeGraphSummary(ideas, projects, filter = {}) {
 
 const DEFAULT_GEMINI_MODEL = "gemini-4-hydrogen";
 const STATIC_FALLBACK_GEMINI_MODELS = [
-  "gemini-3.7-flash",
-  "gemini-3.8-flash",
-  "gemini-3.6-flash",
-  "gemini-3-flash-preview",
-  "gemini-3.5-flash-lite",
   "gemini-4-argon",
   "gemini-4-neon",
+  "gemini-3.8-flash",
+  "gemini-3.7-flash",
+  "gemini-3.6-flash",
+  "gemini-3-flash-preview",
 ];
 
 let cachedDiscoveredModels = { keyHash: "", models: [], fetchedAt: 0 };
@@ -501,17 +500,15 @@ function scoreDiscoveredGeminiModel(name) {
   const n = name.toLowerCase();
   if (n === "gemini-4-hydrogen") return 100;
   if (n.includes("hydrogen")) return 96;
-  // Prefer free-tier-friendly Flash pools ahead of paid-only Argon/Neon/Carbon when Hydrogen spikes
-  if (n === "gemini-3.7-flash") return 92;
-  if (n === "gemini-3.8-flash") return 90;
-  if (n === "gemini-3.6-flash") return 88;
-  if (n === "gemini-3-flash-preview") return 86;
-  if (n === "gemini-3.5-flash-lite") return 84;
-  if (n.startsWith("gemini-3") && n.includes("flash")) return 82;
-  if (n === "gemini-4-argon") return 70;
-  if (n === "gemini-4-neon") return 68;
-  if (n === "gemini-4-carbon") return 66;
-  if (n.startsWith("gemini-4")) return 64;
+  if (n === "gemini-4-argon") return 94;
+  if (n === "gemini-4-neon") return 92;
+  if (n === "gemini-4-carbon") return 88;
+  if (n.startsWith("gemini-4")) return 86;
+  if (n === "gemini-3.8-flash") return 82;
+  if (n === "gemini-3.7-flash") return 80;
+  if (n === "gemini-3.6-flash") return 78;
+  if (n === "gemini-3-flash-preview") return 76;
+  if (n.startsWith("gemini-3") && n.includes("flash")) return 72;
   if (n.startsWith("gemini-3")) return 60;
   if (n.includes("flash")) return 40;
   return 20;
@@ -570,6 +567,7 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
       ? lastHealthyGeminiModel.model
       : null;
   const primaryModel = stickyModel || requestedPrimary;
+  const overallDeadline = Date.now() + 42_000;
   const attemptsLog = [];
 
   const attemptSingleModel = async (targetModel, retries) => {
@@ -577,9 +575,21 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
       targetModel,
     )}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
+    const isGemini4 = /^gemini-4/i.test(targetModel);
+    const generationConfig = {
+      responseMimeType: "application/json",
+      ...(responseSchema ? { responseSchema } : {}),
+      ...(isGemini4 ? { thinkingConfig: { thinkingLevel: "low" } } : {}),
+    };
+
     for (let attempt = 1; attempt <= retries; attempt += 1) {
+      const remaining = overallDeadline - Date.now();
+      if (remaining < 3500) {
+        return { ok: false, fatal: false, error: `Server time budget reached before ${targetModel}` };
+      }
+      const perAttemptMs = Math.min(18_000, remaining - 1500);
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 28000);
+      const timeoutId = setTimeout(() => controller.abort(), perAttemptMs);
       let res;
       try {
         res = await fetch(endpoint, {
@@ -588,17 +598,14 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              responseMimeType: "application/json",
-              ...(responseSchema ? { responseSchema } : {}),
-            },
+            generationConfig,
           }),
         });
       } catch (fetchErr) {
         clearTimeout(timeoutId);
         attemptsLog.push(`${targetModel}:timeout`);
         if (attempt < retries) {
-          await sleepMs(600);
+          await sleepMs(400);
           continue;
         }
         return { ok: false, fatal: false, error: `Timeout on ${targetModel}: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}` };
@@ -618,7 +625,7 @@ async function callGeminiGenerateJson(apiKey, model, prompt, responseSchema) {
 
       if (res.status === 503 || res.status === 429 || res.status === 500 || res.status === 502) {
         if (attempt < retries) {
-          await sleepMs(700);
+          await sleepMs(500);
           continue;
         }
         return { ok: false, fatal: false, error: errorMsg };
