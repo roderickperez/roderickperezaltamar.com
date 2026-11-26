@@ -154,6 +154,7 @@ async function verifyAgentTokenAndLoad(req, requiredScope) {
       scopes: Array.isArray(payload.scopes) ? payload.scopes : [],
       ideas: Array.isArray(payload.ideas) ? payload.ideas : [],
       projects: Array.isArray(payload.projects) ? payload.projects : [],
+      todos: Array.isArray(payload.todos) ? payload.todos : [],
       customCategories: Array.isArray(payload.custom_categories) ? payload.custom_categories : [],
       updatedAt: payload.updated_at || null,
       url,
@@ -615,6 +616,56 @@ function upsertWikiPageWithAgentToken(tokenHash, page) {
   });
 }
 
+function saveTodosWithAgentToken(tokenHash, todos) {
+  return callAgentSecondBrainRpc("agent_save_todos", {
+    p_token_hash: tokenHash,
+    p_todos: todos,
+  });
+}
+
+function buildCalendarDeadlinesFeed({ todos = [], ideas = [], projects = [] }) {
+  const events = [];
+  for (const t of todos) {
+    if (!t || !t.dueDate) continue;
+    events.push({
+      id: `todo:${t.id}`,
+      kind: "todo",
+      date: String(t.dueDate).slice(0, 10),
+      title: t.title,
+      domain: t.domain || "Uncategorized",
+      status: t.status || "open",
+      priority: t.priority || "medium",
+      rankScore: Number(t.rankScore || 50),
+    });
+  }
+  for (const p of projects) {
+    if (!p || !p.dueDate) continue;
+    events.push({
+      id: `project:${p.id}`,
+      kind: "project",
+      date: String(p.dueDate).slice(0, 10),
+      title: p.title,
+      domain: p.domain || "Uncategorized",
+      status: "open",
+      priority: Number(p.priorityScore || 50) >= 75 ? "high" : "medium",
+    });
+  }
+  for (const i of ideas) {
+    if (!i || i.isSelfSent === false || !i.dueDate) continue;
+    events.push({
+      id: `idea:${i.id}`,
+      kind: "idea",
+      date: String(i.dueDate).slice(0, 10),
+      title: getDisplayTitle(i),
+      domain: i.domain || "Uncategorized",
+      status: i.column === "processed_archived" ? "done" : i.column === "in_progress" ? "in_progress" : "open",
+      priority: i.isStarred ? "high" : "medium",
+    });
+  }
+  events.sort((a, b) => a.date.localeCompare(b.date) || a.title.localeCompare(b.title));
+  return events;
+}
+
 function tokenizeQuery(text) {
   return String(text || "")
     .toLowerCase()
@@ -787,6 +838,8 @@ module.exports = {
   claimHandoffWithAgentToken,
   rememberRuleWithAgentToken,
   upsertWikiPageWithAgentToken,
+  saveTodosWithAgentToken,
+  buildCalendarDeadlinesFeed,
   hybridRankIdeas,
   buildContextPack,
   getDisplayTitle,

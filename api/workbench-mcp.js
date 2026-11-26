@@ -1,5 +1,6 @@
 const {
   appendIdeaWithAgentToken,
+  buildCalendarDeadlinesFeed,
   buildContextPack,
   buildKnowledgeGraphSummary,
   claimHandoffWithAgentToken,
@@ -9,6 +10,7 @@ const {
   loadSecondBrainWithAgentToken,
   rememberRuleWithAgentToken,
   sanitizeIdeaForAgent,
+  saveTodosWithAgentToken,
   upsertWikiPageWithAgentToken,
   verifyAgentTokenAndLoad,
 } = require("./_workbench-lib");
@@ -167,6 +169,74 @@ const MCP_TOOLS = [
         source_idea_ids: { type: "array", items: { type: "string" } },
       },
       required: ["slug", "title", "compiled_truth_md"],
+    },
+  },
+  {
+    name: "list_todos",
+    description:
+      "Read Roderick's right-side To-Do List sorted by AI priority rank and due date (requires scope: read:ideas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        status: { type: "string", enum: ["open", "in_progress", "done"] },
+        domain: { type: "string" },
+      },
+    },
+  },
+  {
+    name: "upsert_todo",
+    description:
+      "Add, edit, suggest, or mark complete a task in Roderick's To-Do List (syncs with Calendar when due_date is set; requires scope: write:ideas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "Existing todo id to edit (omit to create a new task/suggestion)." },
+        title: { type: "string" },
+        domain: { type: "string" },
+        due_date: { type: "string", description: "Optional YYYY-MM-DD deadline." },
+        priority: { type: "string", enum: ["high", "medium", "low"] },
+        status: { type: "string", enum: ["open", "in_progress", "done"] },
+        rank_score: { type: "integer", minimum: 1, maximum: 100 },
+        ai_reason: { type: "string" },
+        is_suggestion: { type: "boolean", description: "True to mark as an AI suggestion for owner approval." },
+        linked_idea_id: { type: "string" },
+      },
+      required: ["title"],
+    },
+  },
+  {
+    name: "rank_todos",
+    description:
+      "Batch re-rank Roderick's active To-Dos with scores (1-100), crisp reasons, and optional suggested due dates (requires scope: write:ideas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        rankings: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+              rank_score: { type: "integer", minimum: 1, maximum: 100 },
+              ai_reason: { type: "string" },
+              due_date: { type: "string" },
+            },
+            required: ["id", "rank_score"],
+          },
+        },
+      },
+      required: ["rankings"],
+    },
+  },
+  {
+    name: "get_calendar_deadlines",
+    description:
+      "Return the unified deadlines calendar combining To-Dos, Project milestones, and Email deadlines (requires scope: read:ideas).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        domain: { type: "string" },
+      },
     },
   },
 ];
@@ -529,6 +599,115 @@ module.exports = async function (req, res) {
       return res.status(200).json(
         jsonRpcResult(id, {
           content: [{ type: "text", text: JSON.stringify(saved, null, 2) }],
+        }),
+      );
+    }
+
+    if (toolName === "list_todos") {
+      if (!requireScope("read:ideas")) return;
+      const status = args.status ? String(args.status) : "";
+      const domain = args.domain ? String(args.domain).toLowerCase() : "";
+      const todos = (baseAuth.todos || [])
+        .filter((t) => {
+          if (status && t.status !== status) return false;
+          if (domain && String(t.domain || "").toLowerCase() !== domain) return false;
+          return true;
+        })
+        .sort((a, b) => (Number(b.rankScore) || 50) - (Number(a.rankScore) || 50));
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify({ total: todos.length, todos }, null, 2) }],
+        }),
+      );
+    }
+
+    if (toolName === "upsert_todo") {
+      if (!requireScope("write:ideas")) return;
+      const title = String(args.title || "").trim();
+      if (!title) {
+        return res.status(200).json(jsonRpcError(id, -32602, "title is required"));
+      }
+      const nowIso = new Date().toISOString();
+      const existingList = Array.isArray(baseAuth.todos) ? [...baseAuth.todos] : [];
+      const targetId = args.id ? String(args.id).trim() : `todo_ag_${Date.now()}`;
+      const idx = existingList.findIndex((t) => t.id === targetId);
+      const prev = idx >= 0 ? existingList[idx] : null;
+      const nextTodo = {
+        id: targetId,
+        title,
+        domain: String(args.domain || (prev && prev.domain) || "TiefWerk").trim(),
+        dueDate: args.due_date ? String(args.due_date).slice(0, 10) : (prev && prev.dueDate) || undefined,
+        priority: ["high", "medium", "low"].includes(args.priority) ? args.priority : (prev && prev.priority) || "medium",
+        status: ["open", "in_progress", "done"].includes(args.status) ? args.status : (prev && prev.status) || "open",
+        rankScore: Number.isFinite(Number(args.rank_score))
+          ? Math.max(1, Math.min(100, Math.round(Number(args.rank_score))))
+          : (prev && prev.rankScore) || 75,
+        aiReason: args.ai_reason ? String(args.ai_reason).trim() : (prev && prev.aiReason) || `Updated by ${baseAuth.label}`,
+        source: "agent",
+        agentName: baseAuth.label || "Agent",
+        isSuggestion: typeof args.is_suggestion === "boolean" ? args.is_suggestion : idx < 0,
+        linkedIdeaId: args.linked_idea_id || (prev && prev.linkedIdeaId) || undefined,
+        createdAt: (prev && prev.createdAt) || nowIso,
+        updatedAt: nowIso,
+      };
+      if (idx >= 0) existingList[idx] = nextTodo;
+      else existingList.unshift(nextTodo);
+
+      const saved = await saveTodosWithAgentToken(baseAuth.tokenHash, existingList.slice(0, 200));
+      if (!saved || saved.ok !== true) {
+        return res.status(200).json(jsonRpcError(id, -32000, (saved && saved.error) || "Failed to save todo."));
+      }
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify({ saved: true, todo: nextTodo }, null, 2) }],
+        }),
+      );
+    }
+
+    if (toolName === "rank_todos") {
+      if (!requireScope("write:ideas")) return;
+      const updates = Array.isArray(args.rankings) ? args.rankings : [];
+      if (updates.length === 0) {
+        return res.status(200).json(jsonRpcError(id, -32602, "rankings array is required"));
+      }
+      const updateMap = new Map(updates.map((u) => [String(u.id), u]));
+      const nowIso = new Date().toISOString();
+      let updatedCount = 0;
+      const nextList = (baseAuth.todos || []).map((t) => {
+        const u = updateMap.get(String(t.id));
+        if (!u) return t;
+        updatedCount += 1;
+        return {
+          ...t,
+          rankScore: Math.max(1, Math.min(100, Math.round(Number(u.rank_score || t.rankScore || 50)))),
+          aiReason: u.ai_reason ? String(u.ai_reason).trim() : t.aiReason,
+          dueDate: u.due_date ? String(u.due_date).slice(0, 10) : t.dueDate,
+          agentName: baseAuth.label || t.agentName,
+          updatedAt: nowIso,
+        };
+      });
+      const saved = await saveTodosWithAgentToken(baseAuth.tokenHash, nextList);
+      if (!saved || saved.ok !== true) {
+        return res.status(200).json(jsonRpcError(id, -32000, (saved && saved.error) || "Failed to save ranked todos."));
+      }
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify({ ok: true, updatedCount }, null, 2) }],
+        }),
+      );
+    }
+
+    if (toolName === "get_calendar_deadlines") {
+      if (!requireScope("read:ideas")) return;
+      const domain = args.domain ? String(args.domain).toLowerCase() : "";
+      const events = buildCalendarDeadlinesFeed({
+        todos: baseAuth.todos || [],
+        ideas: baseAuth.ideas || [],
+        projects: baseAuth.projects || [],
+      }).filter((e) => !domain || String(e.domain || "").toLowerCase() === domain);
+      return res.status(200).json(
+        jsonRpcResult(id, {
+          content: [{ type: "text", text: JSON.stringify({ total: events.length, deadlines: events }, null, 2) }],
         }),
       );
     }

@@ -25,9 +25,9 @@ module.exports = async function (req, res) {
   try {
     // GET: Load cloud snapshot + agent tokens + optional second-brain tables (rules, wiki, handoffs)
     if (req.method === "GET") {
-      const [snapRes, tokRes, rulesRes, wikiRes, handoffsRes] = await Promise.all([
+      const [snapResWithTodos, tokRes, rulesRes, wikiRes, handoffsRes] = await Promise.all([
         fetch(
-          `${url}/rest/v1/workbench_snapshots?select=ideas,projects,digests,custom_categories,updated_at&owner_id=eq.${encodeURIComponent(userId)}`,
+          `${url}/rest/v1/workbench_snapshots?select=ideas,projects,digests,todos,custom_categories,updated_at&owner_id=eq.${encodeURIComponent(userId)}`,
           { headers: { ...headers, Accept: "application/json" } },
         ),
         fetch(
@@ -47,6 +47,15 @@ module.exports = async function (req, res) {
           { headers: { ...headers, Accept: "application/json" } },
         ).catch(() => null),
       ]);
+
+      // Fallback cleanly if todos column hasn't been added via workbench_todos.sql yet
+      let snapRes = snapResWithTodos;
+      if (!snapRes.ok) {
+        snapRes = await fetch(
+          `${url}/rest/v1/workbench_snapshots?select=ideas,projects,digests,custom_categories,updated_at&owner_id=eq.${encodeURIComponent(userId)}`,
+          { headers: { ...headers, Accept: "application/json" } },
+        );
+      }
 
       if (!snapRes.ok || !tokRes.ok) {
         return res.status(503).json({
@@ -73,6 +82,7 @@ module.exports = async function (req, res) {
               ideas: Array.isArray(row.ideas) ? row.ideas : [],
               projects: Array.isArray(row.projects) ? row.projects : [],
               digests: Array.isArray(row.digests) ? row.digests : [],
+              todos: Array.isArray(row.todos) ? row.todos : [],
               customCategories: Array.isArray(row.custom_categories) ? row.custom_categories : [],
               updatedAt: row.updated_at || new Date().toISOString(),
             }
@@ -86,11 +96,11 @@ module.exports = async function (req, res) {
       });
     }
 
-    // PUT: Save cloud snapshot (+ optional secondBrain rules/wiki/handoffs sync)
+    // PUT: Save cloud snapshot (+ optional todos & secondBrain rules/wiki/handoffs sync)
     if (req.method === "PUT") {
       const body = req.body || {};
       const nowIso = new Date().toISOString();
-      const payload = {
+      const basePayload = {
         owner_id: userId,
         ideas: Array.isArray(body.ideas) ? body.ideas : [],
         projects: Array.isArray(body.projects) ? body.projects : [],
@@ -98,20 +108,38 @@ module.exports = async function (req, res) {
         custom_categories: Array.isArray(body.customCategories) ? body.customCategories : [],
         updated_at: nowIso,
       };
+      const payloadWithTodos = {
+        ...basePayload,
+        todos: Array.isArray(body.todos) ? body.todos.slice(0, 200) : [],
+      };
 
-      const upsertRes = await fetch(`${url}/rest/v1/workbench_snapshots?on_conflict=owner_id`, {
+      let upsertRes = await fetch(`${url}/rest/v1/workbench_snapshots?on_conflict=owner_id`, {
         method: "POST",
         headers: {
           ...headers,
           "Content-Type": "application/json",
           Prefer: "resolution=merge-duplicates,return=minimal",
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(payloadWithTodos),
       });
+
+      // Fallback cleanly if todos column hasn't been added yet
+      if (!upsertRes.ok) {
+        upsertRes = await fetch(`${url}/rest/v1/workbench_snapshots?on_conflict=owner_id`, {
+          method: "POST",
+          headers: {
+            ...headers,
+            "Content-Type": "application/json",
+            Prefer: "resolution=merge-duplicates,return=minimal",
+          },
+          body: JSON.stringify(basePayload),
+        });
+      }
 
       if (!upsertRes.ok) {
         return res.status(502).json({ error: "Failed to save workbench snapshot to Supabase." });
       }
+      const payload = basePayload;
 
       // Best-effort sync of second-brain tables (succeeds once supabase/workbench_second_brain.sql is run)
       const secondBrain = body.secondBrain || null;

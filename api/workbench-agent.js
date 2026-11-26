@@ -1,5 +1,6 @@
 const {
   appendIdeaWithAgentToken,
+  buildCalendarDeadlinesFeed,
   buildContextPack,
   buildKnowledgeGraphSummary,
   claimHandoffWithAgentToken,
@@ -9,6 +10,7 @@ const {
   loadSecondBrainWithAgentToken,
   rememberRuleWithAgentToken,
   sanitizeIdeaForAgent,
+  saveTodosWithAgentToken,
   verifyAgentTokenAndLoad,
 } = require("./_workbench-lib");
 
@@ -130,6 +132,32 @@ function buildOpenApiSpec(host) {
           responses: { "200": { description: "Rule saved" } },
         },
       },
+      "/api/workbench-agent/todos": {
+        get: {
+          operationId: "listTodos",
+          summary: "List Roderick's right-side To-Do list sorted by priority rank & due date",
+          responses: { "200": { description: "To-Do list JSON" } },
+        },
+        post: {
+          operationId: "upsertTodo",
+          summary: "Add, edit, or suggest a To-Do item (syncs with Calendar when due_date is set)",
+          responses: { "200": { description: "Saved To-Do item" } },
+        },
+      },
+      "/api/workbench-agent/todos/rank": {
+        post: {
+          operationId: "rankTodos",
+          summary: "Batch re-rank To-Do items with priority scores (1-100) and reasons",
+          responses: { "200": { description: "Updated rankings count" } },
+        },
+      },
+      "/api/workbench-agent/calendar": {
+        get: {
+          operationId: "getCalendarDeadlines",
+          summary: "List upcoming deadlines across To-Dos, Projects, and Emails",
+          responses: { "200": { description: "Calendar deadlines feed" } },
+        },
+      },
     },
   };
 }
@@ -151,7 +179,12 @@ module.exports = async function (req, res) {
       ? "read:projects"
       : route === "graph"
         ? "read:graph"
-        : (route === "ideas" || route === "handoffs" || route === "handoffs/claim" || route === "rules") &&
+        : (route === "ideas" ||
+            route === "handoffs" ||
+            route === "handoffs/claim" ||
+            route === "rules" ||
+            route === "todos" ||
+            route === "todos/rank") &&
             req.method === "POST"
           ? "write:ideas"
           : "read:ideas";
@@ -255,6 +288,81 @@ module.exports = async function (req, res) {
         agent_name: auth.label,
       });
       return res.status(saved && saved.ok ? 200 : (saved && saved.status) || 409).json(saved);
+    }
+
+    if (req.method === "GET" && route === "todos") {
+      const status = req.query.status ? String(req.query.status) : "";
+      const domain = req.query.domain ? String(req.query.domain).toLowerCase() : "";
+      const todos = (auth.todos || [])
+        .filter((t) => (!status || t.status === status) && (!domain || String(t.domain || "").toLowerCase() === domain))
+        .sort((a, b) => (Number(b.rankScore) || 50) - (Number(a.rankScore) || 50));
+      return res.status(200).json({ total: todos.length, todos });
+    }
+
+    if (req.method === "POST" && route === "todos") {
+      const body = req.body || {};
+      const title = String(body.title || "").trim();
+      if (!title) return res.status(400).json({ error: "title is required" });
+      const nowIso = new Date().toISOString();
+      const list = Array.isArray(auth.todos) ? [...auth.todos] : [];
+      const targetId = body.id ? String(body.id).trim() : `todo_ag_${Date.now()}`;
+      const idx = list.findIndex((t) => t.id === targetId);
+      const prev = idx >= 0 ? list[idx] : null;
+      const nextTodo = {
+        id: targetId,
+        title,
+        domain: String(body.domain || (prev && prev.domain) || "TiefWerk").trim(),
+        dueDate: body.due_date || body.dueDate ? String(body.due_date || body.dueDate).slice(0, 10) : (prev && prev.dueDate) || undefined,
+        priority: ["high", "medium", "low"].includes(body.priority) ? body.priority : (prev && prev.priority) || "medium",
+        status: ["open", "in_progress", "done"].includes(body.status) ? body.status : (prev && prev.status) || "open",
+        rankScore: Number.isFinite(Number(body.rank_score ?? body.rankScore))
+          ? Math.max(1, Math.min(100, Math.round(Number(body.rank_score ?? body.rankScore))))
+          : (prev && prev.rankScore) || 75,
+        aiReason: body.ai_reason || body.aiReason ? String(body.ai_reason || body.aiReason).trim() : (prev && prev.aiReason) || `Suggested by ${auth.label}`,
+        source: "agent",
+        agentName: auth.label || "Agent",
+        isSuggestion: typeof body.is_suggestion === "boolean" ? body.is_suggestion : idx < 0,
+        linkedIdeaId: body.linked_idea_id || body.linkedIdeaId || (prev && prev.linkedIdeaId) || undefined,
+        createdAt: (prev && prev.createdAt) || nowIso,
+        updatedAt: nowIso,
+      };
+      if (idx >= 0) list[idx] = nextTodo;
+      else list.unshift(nextTodo);
+      const saved = await saveTodosWithAgentToken(auth.tokenHash, list.slice(0, 200));
+      return res.status(saved && saved.ok ? 200 : (saved && saved.status) || 502).json({ ok: Boolean(saved && saved.ok), todo: nextTodo });
+    }
+
+    if (req.method === "POST" && route === "todos/rank") {
+      const updates = Array.isArray(req.body && req.body.rankings) ? req.body.rankings : [];
+      if (updates.length === 0) return res.status(400).json({ error: "rankings array is required" });
+      const map = new Map(updates.map((u) => [String(u.id), u]));
+      const nowIso = new Date().toISOString();
+      let updatedCount = 0;
+      const nextList = (auth.todos || []).map((t) => {
+        const u = map.get(String(t.id));
+        if (!u) return t;
+        updatedCount += 1;
+        return {
+          ...t,
+          rankScore: Math.max(1, Math.min(100, Math.round(Number(u.rank_score ?? u.rankScore ?? t.rankScore ?? 50)))),
+          aiReason: u.ai_reason || u.aiReason ? String(u.ai_reason || u.aiReason).trim() : t.aiReason,
+          dueDate: u.due_date || u.dueDate ? String(u.due_date || u.dueDate).slice(0, 10) : t.dueDate,
+          agentName: auth.label || t.agentName,
+          updatedAt: nowIso,
+        };
+      });
+      const saved = await saveTodosWithAgentToken(auth.tokenHash, nextList);
+      return res.status(saved && saved.ok ? 200 : (saved && saved.status) || 502).json({ ok: Boolean(saved && saved.ok), updatedCount });
+    }
+
+    if (req.method === "GET" && route === "calendar") {
+      const domain = req.query.domain ? String(req.query.domain).toLowerCase() : "";
+      const deadlines = buildCalendarDeadlinesFeed({
+        todos: auth.todos || [],
+        ideas: auth.ideas || [],
+        projects: auth.projects || [],
+      }).filter((e) => !domain || String(e.domain || "").toLowerCase() === domain);
+      return res.status(200).json({ total: deadlines.length, deadlines });
     }
 
     if (req.method === "GET" && route === "projects") {

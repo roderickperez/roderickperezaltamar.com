@@ -195,6 +195,45 @@ module.exports = async function (req, res) {
       return res.status(200).json({ ok: true, result });
     }
 
+    if (action === "rank_todos") {
+      const prompt = `You are RPA! Workbench Executive Assistant for Roderick Perez Altamar.\n1. Rank every active To-Do (1-100) based on deadline urgency and project impact (${CANONICAL_PROJECTS_PROMPT.replace(/\n/g, "; ")}). Give a crisp <12-word reason.\n2. Suggest up to 3 concrete new To-Dos from topIdeas or project nextSteps not already in activeTodos.\nContext:\n${JSON.stringify(body.context || {})}`;
+      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-2.5-flash", prompt, {
+        type: "OBJECT",
+        properties: {
+          rankings: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                id: { type: "STRING" },
+                rankScore: { type: "NUMBER" },
+                reason: { type: "STRING" },
+                suggestedDueDate: { type: "STRING" },
+              },
+              required: ["id", "rankScore", "reason"],
+            },
+          },
+          suggestions: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                title: { type: "STRING" },
+                domain: { type: "STRING" },
+                priority: { type: "STRING", enum: ["high", "medium", "low"] },
+                dueDate: { type: "STRING" },
+                reason: { type: "STRING" },
+                linkedIdeaId: { type: "STRING" },
+              },
+              required: ["title", "domain", "priority", "reason"],
+            },
+          },
+        },
+        required: ["rankings", "suggestions"],
+      });
+      return res.status(200).json({ ok: true, result });
+    }
+
     return res.status(400).json({ error: `Unsupported AI proxy action: ${action}` });
   } catch (err) {
     return res.status(502).json({

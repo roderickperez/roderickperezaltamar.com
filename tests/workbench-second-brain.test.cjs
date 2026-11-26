@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const mcpHandler = require("../api/workbench-mcp");
 const agentHandler = require("../api/workbench-agent");
-const { hybridRankIdeas, buildContextPack } = require("../api/_workbench-lib");
+const { hybridRankIdeas, buildContextPack, buildCalendarDeadlinesFeed } = require("../api/_workbench-lib");
 
 function createMockRes() {
   const res = {
@@ -196,12 +196,162 @@ test("MCP serves 11 tools including context_pack, create_handoff, claim_handoff,
     assert.ok(claim2.body.error);
     assert.equal(claim2.body.error.code, -32009);
 
-    // 4. OpenAPI spec exposes /context-pack and /handoffs routes
+    // 4. OpenAPI spec exposes /context-pack, /handoffs, /todos, /todos/rank, and /calendar routes
     const specRes = createMockRes();
     await agentHandler({ method: "GET", headers: { host: "www.roderickperezaltamar.com" }, query: { route: "openapi.json" } }, specRes);
     assert.equal(specRes.statusCode, 200);
     assert.ok(specRes.body.paths["/api/workbench-agent/context-pack"]);
     assert.ok(specRes.body.paths["/api/workbench-agent/handoffs"]);
+    assert.ok(specRes.body.paths["/api/workbench-agent/todos"]);
+    assert.ok(specRes.body.paths["/api/workbench-agent/todos/rank"]);
+    assert.ok(specRes.body.paths["/api/workbench-agent/calendar"]);
+  } finally {
+    global.fetch = origFetch;
+  }
+});
+
+test("buildCalendarDeadlinesFeed merges To-Dos, Projects, and self-sent Ideas while excluding external emails", () => {
+  const feed = buildCalendarDeadlinesFeed({
+    todos: [
+      { id: "t1", title: "Submit EAGE abstract", domain: "Conferences", dueDate: "2026-12-01", priority: "high", status: "open", rankScore: 95 },
+      { id: "t2", title: "Undated idea note", domain: "TiefWerk", status: "open" },
+    ],
+    projects: [
+      { id: "p1", title: "TiefWerk Extract v1", domain: "TiefWerk / Extract", dueDate: "2026-12-05", priorityScore: 88 },
+    ],
+    ideas: [
+      { id: "i1", subject: "OMV review deadline", domain: "OMV", dueDate: "2026-11-30", column: "in_progress", isStarred: true, isSelfSent: true },
+      { id: "i2", subject: "External promo deadline", domain: "Uncategorized", dueDate: "2026-11-29", isSelfSent: false },
+    ],
+  });
+
+  assert.equal(feed.length, 3);
+  assert.deepEqual(
+    feed.map((e) => e.id),
+    ["idea:i1", "todo:t1", "project:p1"],
+  );
+  assert.equal(feed[0].status, "in_progress");
+  assert.equal(feed[1].kind, "todo");
+  assert.equal(feed[2].priority, "high");
+});
+
+test("MCP serves 15 tools and supports list_todos, upsert_todo, rank_todos, and get_calendar_deadlines", async () => {
+  process.env.SUPABASE_URL = "https://example.supabase.co";
+  process.env.SUPABASE_PUBLISHABLE_KEY = "sb_publishable_test";
+
+  const token = "rpa_ag_" + "b".repeat(64);
+  let storedTodos = [
+    { id: "todo_1", title: "Draft TiefWerk Kosmos spec", domain: "TiefWerk / Kosmos", dueDate: "2026-12-02", priority: "high", status: "open", rankScore: 70 },
+  ];
+  const origFetch = global.fetch;
+
+  global.fetch = async (url, init) => {
+    const u = String(url);
+    if (u.endsWith("/rpc/agent_get_workbench")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          status: 200,
+          label: "ChatGPT Custom GPT",
+          scopes: ["read:ideas", "read:projects", "read:graph", "write:ideas"],
+          ideas: [{ id: "i1", subject: "Thesis defense prep", domain: "Thesis", dueDate: "2026-12-10", isSelfSent: true }],
+          projects: [{ id: "p1", title: "HandSchrift OCR", domain: "HandSchrift", dueDate: "2026-12-15", priorityScore: 80 }],
+          todos: storedTodos,
+          custom_categories: [],
+        }),
+      };
+    }
+    if (u.endsWith("/rpc/agent_save_todos")) {
+      const body = JSON.parse(init.body);
+      storedTodos = body.p_todos;
+      return { ok: true, status: 200, json: async () => ({ ok: true, status: 200, count: storedTodos.length }) };
+    }
+    throw new Error(`Unexpected fetch URL: ${u}`);
+  };
+
+  try {
+    // 1. Verify all 15 tools exist
+    const listRes = createMockRes();
+    await mcpHandler(
+      { method: "POST", headers: { authorization: `Bearer ${token}` }, body: { jsonrpc: "2.0", id: 1, method: "tools/list" } },
+      listRes,
+    );
+    const toolNames = listRes.body.result.tools.map((t) => t.name);
+    assert.equal(toolNames.length, 15);
+    for (const expected of ["list_todos", "upsert_todo", "rank_todos", "get_calendar_deadlines"]) {
+      assert.ok(toolNames.includes(expected), `Missing MCP tool ${expected}`);
+    }
+
+    // 2. upsert_todo creates an AI suggestion
+    const upsertRes = createMockRes();
+    await mcpHandler(
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "tools/call",
+          params: {
+            name: "upsert_todo",
+            arguments: {
+              title: "Review DominoLab prototype",
+              domain: "DominoLab",
+              due_date: "2026-12-03",
+              priority: "high",
+              rank_score: 92,
+              is_suggestion: true,
+            },
+          },
+        },
+      },
+      upsertRes,
+    );
+    const upserted = JSON.parse(upsertRes.body.result.content[0].text);
+    assert.equal(upserted.saved, true);
+    assert.equal(upserted.todo.agentName, "ChatGPT Custom GPT");
+    assert.equal(upserted.todo.isSuggestion, true);
+    assert.equal(storedTodos.length, 2);
+
+    // 3. rank_todos updates scores & due dates
+    const rankRes = createMockRes();
+    await mcpHandler(
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "tools/call",
+          params: {
+            name: "rank_todos",
+            arguments: {
+              rankings: [{ id: "todo_1", rank_score: 98, ai_reason: "Blocking release", due_date: "2026-11-28" }],
+            },
+          },
+        },
+      },
+      rankRes,
+    );
+    const rankBody = JSON.parse(rankRes.body.result.content[0].text);
+    assert.equal(rankBody.updatedCount, 1);
+    assert.equal(storedTodos.find((t) => t.id === "todo_1").rankScore, 98);
+
+    // 4. get_calendar_deadlines merges todos + projects + ideas
+    const calRes = createMockRes();
+    await mcpHandler(
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}` },
+        body: { jsonrpc: "2.0", id: 4, method: "tools/call", params: { name: "get_calendar_deadlines", arguments: {} } },
+      },
+      calRes,
+    );
+    const calBody = JSON.parse(calRes.body.result.content[0].text);
+    assert.equal(calBody.total, 4);
+    assert.equal(calBody.deadlines[0].date, "2026-11-28");
   } finally {
     global.fetch = origFetch;
   }
