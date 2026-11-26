@@ -2,6 +2,7 @@ const {
   SOURCE_PLATFORMS,
   applySecurityHeaders,
   callGeminiGenerateJson,
+  callGeminiGenerateJsonWithMeta,
   checkRateLimit,
   classifyIdeaWithServerDecisionModel,
   isSameOriginMutation,
@@ -191,7 +192,8 @@ module.exports = async function (req, res) {
 
   try {
     if (action === "test") {
-      await callGeminiGenerateJson(
+      const started = Date.now();
+      const { usedModel } = await callGeminiGenerateJsonWithMeta(
         apiKey,
         body.model || "gemini-4-hydrogen",
         'Reply with JSON {"status":"ok"}',
@@ -200,8 +202,13 @@ module.exports = async function (req, res) {
           properties: { status: { type: "STRING" } },
           required: ["status"],
         },
+        { maxOutputTokens: 128 },
       );
-      return res.status(200).json({ ok: true, message: "Server-side Gemini API proxy connected." });
+      return res.status(200).json({
+        ok: true,
+        usedModel,
+        message: `Server-side Gemini API proxy connected via ${usedModel} (${Date.now() - started}ms).`,
+      });
     }
 
     if (action === "classify_decision") {
@@ -230,39 +237,53 @@ module.exports = async function (req, res) {
         "4. Assign suggestedColumn: 'to_deep_dive' if high-value/actionable or has an upcoming deadline, 'processed_archived' if obsolete/noise, else 'inbox_backlog'.",
         "5. Provide connectionNote (max 140 chars): note how this idea connects to or partially overlaps with another project/module/topic in Roderick's portfolio.",
         "6. Provide 3-6 concise lowercase concept tags for the 3D Knowledge Graph.",
+        "Output ONLY a raw JSON array (one object per input item, preserving exact `id`) with keys: id, platform, domain, isUntitled (boolean), suggestedTitle, oneLineSummary, tags (string[]), dueDate, suggestedColumn, connectionNote.",
         "Canonical Projects:",
         CANONICAL_PROJECTS_PROMPT,
         "Items:",
         JSON.stringify(items),
       ].join("\n");
-      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-4-hydrogen", prompt, {
-        type: "ARRAY",
-        items: {
-          type: "OBJECT",
-          properties: {
-            id: { type: "STRING" },
-            platform: { type: "STRING", enum: SOURCE_PLATFORMS },
-            domain: { type: "STRING" },
-            isUntitled: { type: "BOOLEAN" },
-            suggestedTitle: { type: "STRING" },
-            oneLineSummary: { type: "STRING" },
-            tags: { type: "ARRAY", items: { type: "STRING" } },
-            dueDate: { type: "STRING" },
-            suggestedColumn: { type: "STRING", enum: ["inbox_backlog", "to_deep_dive", "processed_archived"] },
-            connectionNote: { type: "STRING" },
+      const { value: result, usedModel } = await callGeminiGenerateJsonWithMeta(
+        apiKey,
+        body.model || "gemini-4-hydrogen",
+        prompt,
+        {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              id: { type: "STRING" },
+              platform: { type: "STRING", enum: SOURCE_PLATFORMS },
+              domain: { type: "STRING" },
+              isUntitled: { type: "BOOLEAN" },
+              suggestedTitle: { type: "STRING" },
+              oneLineSummary: { type: "STRING" },
+              tags: { type: "ARRAY", items: { type: "STRING" } },
+              dueDate: { type: "STRING" },
+              suggestedColumn: { type: "STRING", enum: ["inbox_backlog", "to_deep_dive", "processed_archived"] },
+              connectionNote: { type: "STRING" },
+            },
+            required: [
+              "id",
+              "platform",
+              "domain",
+              "isUntitled",
+              "suggestedTitle",
+              "oneLineSummary",
+              "tags",
+            ],
           },
-          required: [
-            "id",
-            "platform",
-            "domain",
-            "isUntitled",
-            "suggestedTitle",
-            "oneLineSummary",
-            "tags",
-          ],
         },
-      });
-      return res.status(200).json({ ok: true, results: result });
+        { maxOutputTokens: 2400 },
+      );
+      const unwrapped = Array.isArray(result)
+        ? result
+        : Array.isArray(result?.results)
+          ? result.results
+          : Array.isArray(result?.items)
+            ? result.items
+            : [];
+      return res.status(200).json({ ok: true, results: unwrapped, usedModel });
     }
 
     if (action === "synthesize_projects") {
@@ -272,136 +293,156 @@ module.exports = async function (req, res) {
         `Today is ${todayIso}. Cluster Roderick Perez Altamar's self-sent emails into cohesive, actionable projects using his canonical projects/subdivisions and existing gmailLabels as primary guidelines.`,
         "Canonical Projects:",
         CANONICAL_PROJECTS_PROMPT,
-        "For each project output title, objective, whyItMatters, domain, mvpScope, techStack (2-6 strings), effortTier (" + EFFORT_TIERS.join(" | ") + "), checklist (3-5 concrete execution steps), ideaIds (matching input IDs), priorityScore (1-100), optional dueDate (YYYY-MM-DD if linked emails indicate a deadline/target date else ''), synergyNotes (how this project links/overlaps with other projects in the Knowledge Base), and relatedProjectTitles (names of connected projects).",
-        "Also output suggestedTodos (up to 6 concrete prioritized tasks with title, domain, priority high|medium|low, optional dueDate YYYY-MM-DD, reason, optional linkedIdeaId).",
+        "Output ONLY a raw JSON object with keys `projects` (array) and `suggestedTodos` (array).",
+        "Each project MUST have: title, objective, whyItMatters, domain, mvpScope, techStack (2-6 strings), effortTier (" + EFFORT_TIERS.join(" | ") + "), checklist (3-5 concrete execution steps), ideaIds (matching input IDs), priorityScore (1-100), dueDate (YYYY-MM-DD or ''), synergyNotes, relatedProjectTitles (string[]).",
+        "Each suggestedTodo (up to 6 concrete prioritized tasks) MUST have: title, domain, priority ('high'|'medium'|'low'), dueDate (YYYY-MM-DD or ''), reason, linkedIdeaId.",
         "Ideas:",
         JSON.stringify(manifest),
       ].join("\n");
-      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-4-hydrogen", prompt, {
-        type: "OBJECT",
-        properties: {
-          projects: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                title: { type: "STRING" },
-                objective: { type: "STRING" },
-                whyItMatters: { type: "STRING" },
-                domain: { type: "STRING" },
-                mvpScope: { type: "STRING" },
-                techStack: { type: "ARRAY", items: { type: "STRING" } },
-                effortTier: { type: "STRING", enum: EFFORT_TIERS },
-                checklist: { type: "ARRAY", items: { type: "STRING" } },
-                ideaIds: { type: "ARRAY", items: { type: "STRING" } },
-                priorityScore: { type: "NUMBER" },
-                dueDate: { type: "STRING" },
-                synergyNotes: { type: "STRING" },
-                relatedProjectTitles: { type: "ARRAY", items: { type: "STRING" } },
+      const { value: result, usedModel } = await callGeminiGenerateJsonWithMeta(
+        apiKey,
+        body.model || "gemini-4-hydrogen",
+        prompt,
+        {
+          type: "OBJECT",
+          properties: {
+            projects: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  title: { type: "STRING" },
+                  objective: { type: "STRING" },
+                  whyItMatters: { type: "STRING" },
+                  domain: { type: "STRING" },
+                  mvpScope: { type: "STRING" },
+                  techStack: { type: "ARRAY", items: { type: "STRING" } },
+                  effortTier: { type: "STRING", enum: EFFORT_TIERS },
+                  checklist: { type: "ARRAY", items: { type: "STRING" } },
+                  ideaIds: { type: "ARRAY", items: { type: "STRING" } },
+                  priorityScore: { type: "NUMBER" },
+                  dueDate: { type: "STRING" },
+                  synergyNotes: { type: "STRING" },
+                  relatedProjectTitles: { type: "ARRAY", items: { type: "STRING" } },
+                },
+                required: [
+                  "title",
+                  "objective",
+                  "whyItMatters",
+                  "domain",
+                  "mvpScope",
+                  "techStack",
+                  "effortTier",
+                  "checklist",
+                  "ideaIds",
+                  "priorityScore",
+                ],
               },
-              required: [
-                "title",
-                "objective",
-                "whyItMatters",
-                "domain",
-                "mvpScope",
-                "techStack",
-                "effortTier",
-                "checklist",
-                "ideaIds",
-                "priorityScore",
-              ],
+            },
+            suggestedTodos: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  title: { type: "STRING" },
+                  domain: { type: "STRING" },
+                  priority: { type: "STRING", enum: ["high", "medium", "low"] },
+                  dueDate: { type: "STRING" },
+                  reason: { type: "STRING" },
+                  linkedIdeaId: { type: "STRING" },
+                },
+                required: ["title", "domain", "priority", "reason"],
+              },
             },
           },
-          suggestedTodos: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                title: { type: "STRING" },
-                domain: { type: "STRING" },
-                priority: { type: "STRING", enum: ["high", "medium", "low"] },
-                dueDate: { type: "STRING" },
-                reason: { type: "STRING" },
-                linkedIdeaId: { type: "STRING" },
-              },
-              required: ["title", "domain", "priority", "reason"],
-            },
-          },
+          required: ["projects"],
         },
-        required: ["projects"],
-      });
+        { maxOutputTokens: 6000 },
+      );
       return res.status(200).json({
         ok: true,
-        projects: result.projects || [],
-        suggestedTodos: result.suggestedTodos || [],
+        usedModel,
+        projects: Array.isArray(result?.projects) ? result.projects : [],
+        suggestedTodos: Array.isArray(result?.suggestedTodos) ? result.suggestedTodos : [],
       });
     }
 
     if (action === "compile_digest") {
-      const prompt = `Compile an executive summary (2-3 crisp sentences) and the Top 3 "Execute This Week" quick wins from this snapshot and portfolio.\nInput:\n${JSON.stringify(body.context || {})}`;
-      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-4-hydrogen", prompt, {
-        type: "OBJECT",
-        properties: {
-          executiveSummary: { type: "STRING" },
-          topPicks: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                title: { type: "STRING" },
-                reason: { type: "STRING" },
-                actionStep: { type: "STRING" },
-                url: { type: "STRING" },
-                gmailUrl: { type: "STRING" },
-                effortTier: { type: "STRING", enum: EFFORT_TIERS },
+      const prompt = `Compile an executive summary (2-3 crisp sentences) and the Top 3 "Execute This Week" quick wins from this snapshot and portfolio.\nReturn ONLY a raw JSON object with keys: executiveSummary (string), topPicks (array of {title, reason, actionStep, url, gmailUrl, effortTier}).\nInput:\n${JSON.stringify(body.context || {})}`;
+      const { value: result, usedModel } = await callGeminiGenerateJsonWithMeta(
+        apiKey,
+        body.model || "gemini-4-hydrogen",
+        prompt,
+        {
+          type: "OBJECT",
+          properties: {
+            executiveSummary: { type: "STRING" },
+            topPicks: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  title: { type: "STRING" },
+                  reason: { type: "STRING" },
+                  actionStep: { type: "STRING" },
+                  url: { type: "STRING" },
+                  gmailUrl: { type: "STRING" },
+                  effortTier: { type: "STRING", enum: EFFORT_TIERS },
+                },
+                required: ["title", "reason", "actionStep"],
               },
-              required: ["title", "reason", "actionStep"],
             },
           },
+          required: ["executiveSummary", "topPicks"],
         },
-        required: ["executiveSummary", "topPicks"],
-      });
-      return res.status(200).json({ ok: true, result });
+        { maxOutputTokens: 2048 },
+      );
+      return res.status(200).json({ ok: true, usedModel, result });
     }
 
     if (action === "rank_todos") {
-      const prompt = `You are RPA! Workbench Executive Assistant for Roderick Perez Altamar.\n1. Rank every active To-Do (1-100) based on deadline urgency and project impact (${CANONICAL_PROJECTS_PROMPT.replace(/\n/g, "; ")}). Give a crisp <12-word reason.\n2. Suggest up to 3 concrete new To-Dos from topIdeas or project nextSteps not already in activeTodos.\nContext:\n${JSON.stringify(body.context || {})}`;
-      const result = await callGeminiGenerateJson(apiKey, body.model || "gemini-4-hydrogen", prompt, {
-        type: "OBJECT",
-        properties: {
-          rankings: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                id: { type: "STRING" },
-                rankScore: { type: "NUMBER" },
-                reason: { type: "STRING" },
-                suggestedDueDate: { type: "STRING" },
+      const prompt = `You are RPA! Workbench Executive Assistant for Roderick Perez Altamar.\n1. Rank every active To-Do (1-100) based on deadline urgency and project impact (${CANONICAL_PROJECTS_PROMPT.replace(/\n/g, "; ")}). Give a crisp <12-word reason.\n2. Suggest up to 3 concrete new To-Dos from topIdeas or project nextSteps not already in activeTodos.\nReturn ONLY a raw JSON object with keys: rankings (array of {id, rankScore, reason, suggestedDueDate}) and suggestions (array of {title, domain, priority, dueDate, reason, linkedIdeaId}).\nContext:\n${JSON.stringify(body.context || {})}`;
+      const { value: result, usedModel } = await callGeminiGenerateJsonWithMeta(
+        apiKey,
+        body.model || "gemini-4-hydrogen",
+        prompt,
+        {
+          type: "OBJECT",
+          properties: {
+            rankings: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  id: { type: "STRING" },
+                  rankScore: { type: "NUMBER" },
+                  reason: { type: "STRING" },
+                  suggestedDueDate: { type: "STRING" },
+                },
+                required: ["id", "rankScore", "reason"],
               },
-              required: ["id", "rankScore", "reason"],
+            },
+            suggestions: {
+              type: "ARRAY",
+              items: {
+                type: "OBJECT",
+                properties: {
+                  title: { type: "STRING" },
+                  domain: { type: "STRING" },
+                  priority: { type: "STRING", enum: ["high", "medium", "low"] },
+                  dueDate: { type: "STRING" },
+                  reason: { type: "STRING" },
+                  linkedIdeaId: { type: "STRING" },
+                },
+                required: ["title", "domain", "priority", "reason"],
+              },
             },
           },
-          suggestions: {
-            type: "ARRAY",
-            items: {
-              type: "OBJECT",
-              properties: {
-                title: { type: "STRING" },
-                domain: { type: "STRING" },
-                priority: { type: "STRING", enum: ["high", "medium", "low"] },
-                dueDate: { type: "STRING" },
-                reason: { type: "STRING" },
-                linkedIdeaId: { type: "STRING" },
-              },
-              required: ["title", "domain", "priority", "reason"],
-            },
-          },
+          required: ["rankings", "suggestions"],
         },
-        required: ["rankings", "suggestions"],
-      });
-      return res.status(200).json({ ok: true, result });
+        { maxOutputTokens: 2400 },
+      );
+      return res.status(200).json({ ok: true, usedModel, result });
     }
 
     return res.status(400).json({ error: `Unsupported AI proxy action: ${action}` });
