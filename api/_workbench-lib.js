@@ -474,12 +474,12 @@ function buildKnowledgeGraphSummary(ideas, projects, filter = {}) {
 const DEFAULT_GEMINI_MODEL = "gemini-4-hydrogen";
 const STATIC_FALLBACK_GEMINI_MODELS = [
   "gemini-3.8-flash",
+  "gemini-3.1-flash-lite-preview",
+  "gemini-3.5-flash-lite",
   "gemini-3.7-flash",
   "gemini-3.6-flash",
   "gemini-3-flash-preview",
-  "gemini-3.5-flash-lite",
   "gemini-4-argon",
-  "gemini-4-neon",
 ];
 
 let cachedDiscoveredModels = { keyHash: "", models: [], fetchedAt: 0 };
@@ -501,19 +501,20 @@ function scoreDiscoveredGeminiModel(name) {
   const n = name.toLowerCase();
   if (n === "gemini-4-hydrogen") return 100;
   if (n.includes("hydrogen")) return 96;
-  // Prioritize fast Flash models ahead of heavyweight frontier reasoning models (argon/neon)
-  // so batch triage never stalls inside serverless time budgets.
-  if (n === "gemini-3.8-flash") return 92;
-  if (n === "gemini-3.7-flash") return 90;
-  if (n === "gemini-3.6-flash") return 88;
-  if (n === "gemini-3-flash-preview") return 86;
-  if (n === "gemini-3.5-flash-lite") return 84;
-  if (n.startsWith("gemini-3") && n.includes("flash")) return 80;
-  if (n === "gemini-4-argon") return 74;
-  if (n === "gemini-4-neon") return 70;
-  if (n === "gemini-4-carbon") return 66;
-  if (n.startsWith("gemini-4")) return 62;
-  if (n.startsWith("gemini-3")) return 55;
+  // Prioritize fast Flash & Flash-Lite pools ahead of heavyweight reasoning models
+  if (n === "gemini-3.8-flash") return 93;
+  if (n === "gemini-3.1-flash-lite-preview") return 91;
+  if (n === "gemini-3.5-flash-lite") return 90;
+  if (n.includes("flash-lite")) return 89;
+  if (n === "gemini-3.7-flash") return 86;
+  if (n === "gemini-3.6-flash") return 84;
+  if (n === "gemini-3-flash-preview") return 82;
+  if (n.startsWith("gemini-3") && n.includes("flash")) return 78;
+  if (n === "gemini-4-argon") return 72;
+  if (n === "gemini-4-neon") return 68;
+  if (n === "gemini-4-carbon") return 64;
+  if (n.startsWith("gemini-4")) return 60;
+  if (n.startsWith("gemini-3")) return 52;
   if (n.includes("flash")) return 40;
   return 20;
 }
@@ -608,17 +609,18 @@ async function callGeminiGenerateJsonWithMeta(apiKey, model, prompt, responseSch
       targetModel,
     )}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
-    const isGemini4 = /^gemini-4/i.test(targetModel);
-    // IMPORTANT: On Gemini 4 models (e.g. gemini-4-hydrogen), combining thinkingConfig with
-    // strict responseSchema constrained decoding causes multi-minute hangs/timeouts.
-    // Omitting responseSchema while keeping responseMimeType: "application/json" + thinkingLevel: "low"
-    // lets Gemini 4 return crisp structured JSON in a few seconds.
+    const isThinkingModel = /^gemini-(4|3\.[6-9])/i.test(targetModel) && !/lite/i.test(targetModel);
+    // IMPORTANT:
+    // 1. On Gemini 4 and Gemini 3.6–3.8 thinking models, default thinkingLevel is HIGH/MEDIUM,
+    //    so always set thinkingLevel: "LOW" for fast latency.
+    // 2. Never pass a low maxOutputTokens cap (thinking tokens share maxOutputTokens and low caps
+    //    can stall or truncate thinking models).
+    // 3. Omit strict responseSchema (constrained decoding + thinkingConfig frequently hangs);
+    //    keep responseMimeType: "application/json" + explicit prompt schema + extractJsonFromText.
     const generationConfig = {
       responseMimeType: "application/json",
       temperature: 0.2,
-      ...(options.maxOutputTokens ? { maxOutputTokens: options.maxOutputTokens } : {}),
-      ...(responseSchema && !isGemini4 ? { responseSchema } : {}),
-      ...(isGemini4 ? { thinkingConfig: { thinkingLevel: "low" } } : {}),
+      ...(isThinkingModel ? { thinkingConfig: { thinkingLevel: "LOW" } } : {}),
     };
 
     for (let attempt = 1; attempt <= retries; attempt += 1) {
@@ -627,6 +629,7 @@ async function callGeminiGenerateJsonWithMeta(apiKey, model, prompt, responseSch
         return { ok: false, fatal: false, error: `Server time budget reached before ${targetModel}` };
       }
       const perAttemptMs = Math.min(maxSingleMs, remaining - 1500);
+      const startedAt = Date.now();
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), perAttemptMs);
       let res;
@@ -642,12 +645,15 @@ async function callGeminiGenerateJsonWithMeta(apiKey, model, prompt, responseSch
         });
       } catch (fetchErr) {
         clearTimeout(timeoutId);
-        attemptsLog.push(`${targetModel}:timeout`);
+        const elapsedSec = ((Date.now() - startedAt) / 1000).toFixed(1);
+        const isAbort = fetchErr && (fetchErr.name === "AbortError" || /abort/i.test(String(fetchErr.message || "")));
+        const tag = isAbort ? `timeout(${elapsedSec}s)` : `net(${fetchErr instanceof Error ? fetchErr.message.slice(0, 40) : "err"})`;
+        attemptsLog.push(`${targetModel}:${tag}`);
         if (attempt < retries) {
           await sleepMs(400);
           continue;
         }
-        return { ok: false, fatal: false, error: `Timeout on ${targetModel}: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}` };
+        return { ok: false, fatal: false, error: `${tag} on ${targetModel}` };
       }
       clearTimeout(timeoutId);
 
@@ -657,7 +663,11 @@ async function callGeminiGenerateJsonWithMeta(apiKey, model, prompt, responseSch
           ? data.candidates[0].content.parts
           : [];
         const answerPart = [...parts].reverse().find((p) => p && !p.thought && typeof p.text === "string" && p.text.trim());
-        const rawText = answerPart?.text || parts[0]?.text || "{}";
+        const rawText = answerPart?.text || parts[0]?.text || "";
+        if (!rawText.trim()) {
+          attemptsLog.push(`${targetModel}:empty`);
+          return { ok: false, fatal: false, error: `Empty response from ${targetModel}` };
+        }
         try {
           const parsed = extractJsonFromText(rawText);
           lastHealthyGeminiModel = { keyHash, model: targetModel, at: Date.now() };
@@ -683,7 +693,7 @@ async function callGeminiGenerateJsonWithMeta(apiKey, model, prompt, responseSch
         }
         return { ok: false, fatal: false, error: errorMsg };
       }
-      if (res.status === 404) {
+      if (res.status === 404 || res.status === 400) {
         return { ok: false, fatal: false, error: errorMsg };
       }
       return { ok: false, fatal: true, error: errorMsg };
@@ -691,12 +701,12 @@ async function callGeminiGenerateJsonWithMeta(apiKey, model, prompt, responseSch
     return { ok: false, fatal: false, error: `Failed on ${targetModel}` };
   };
 
-  // 1. Try primary (gemini-4-hydrogen) with a crisp 20s window (no responseSchema hang)
-  const first = await attemptSingleModel(primaryModel, 1, 20_000);
+  // 1. Try primary (gemini-4-hydrogen) with a 22s window (LOW thinking, no schema hang, no token cap)
+  const first = await attemptSingleModel(primaryModel, 1, 22_000);
   if (first.ok) return { value: first.value, usedModel: first.usedModel };
   if (first.fatal) throw new Error(first.error);
 
-  // 2. Discover live models enabled on this API key & walk fast Flash pools before heavyweight reasoning models
+  // 2. Discover live models enabled on this API key & walk fast Flash/Flash-Lite pools
   const discovered = await discoverLiveGeminiModels(apiKey);
   const candidates = Array.from(
     new Set(
@@ -710,7 +720,8 @@ async function callGeminiGenerateJsonWithMeta(apiKey, model, prompt, responseSch
 
   let lastError = first.error;
   for (const candidate of candidates) {
-    const res = await attemptSingleModel(candidate, 1, 12_000);
+    const budgetMs = /lite/i.test(candidate) ? 9_000 : 11_000;
+    const res = await attemptSingleModel(candidate, 1, budgetMs);
     if (res.ok) return { value: res.value, usedModel: res.usedModel };
     if (res.fatal) throw new Error(res.error);
     lastError = res.error;

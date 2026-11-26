@@ -202,7 +202,6 @@ module.exports = async function (req, res) {
           properties: { status: { type: "STRING" } },
           required: ["status"],
         },
-        { maxOutputTokens: 128 },
       );
       return res.status(200).json({
         ok: true,
@@ -274,7 +273,6 @@ module.exports = async function (req, res) {
             ],
           },
         },
-        { maxOutputTokens: 2400 },
       );
       const unwrapped = Array.isArray(result)
         ? result
@@ -357,7 +355,6 @@ module.exports = async function (req, res) {
           },
           required: ["projects"],
         },
-        { maxOutputTokens: 6000 },
       );
       return res.status(200).json({
         ok: true,
@@ -395,7 +392,6 @@ module.exports = async function (req, res) {
           },
           required: ["executiveSummary", "topPicks"],
         },
-        { maxOutputTokens: 2048 },
       );
       return res.status(200).json({ ok: true, usedModel, result });
     }
@@ -440,7 +436,6 @@ module.exports = async function (req, res) {
           },
           required: ["rankings", "suggestions"],
         },
-        { maxOutputTokens: 2400 },
       );
       return res.status(200).json({ ok: true, usedModel, result });
     }
