@@ -748,7 +748,7 @@ function toSlug(value) {
     .replace(/^-+|-+$/g, "");
 }
 
-function buildContextPack({ query, projectSlug, ideas, projects, rules, wikiPages, handoffs }) {
+function buildContextPack({ query, projectSlug, ideas, projects, todos = [], rules, wikiPages, handoffs }) {
   const activeRules = (rules || []).filter((r) => r.status !== "retired");
   const profileRules = activeRules.filter((r) => r.kind === "profile");
   const routingRules = activeRules.filter((r) => r.kind !== "profile" && r.status === "confirmed");
@@ -802,6 +802,19 @@ function buildContextPack({ query, projectSlug, ideas, projects, rules, wikiPage
       linkedCount: Array.isArray(p.ideaIds) ? p.ideaIds.length : 0,
     }));
 
+  const upcomingDeadlines = buildCalendarDeadlinesFeed({
+    todos,
+    ideas: selfIdeas,
+    projects,
+  })
+    .filter((e) => !slugFilter || toSlug(e.domain).includes(slugFilter))
+    .slice(0, 15);
+
+  const activeTodos = (todos || [])
+    .filter((t) => t && t.status !== "done" && (!slugFilter || toSlug(t.domain).includes(slugFilter)))
+    .sort((a, b) => (Number(b.rankScore) || 50) - (Number(a.rankScore) || 50))
+    .slice(0, 15);
+
   return {
     owner: "Roderick Perez Altamar",
     canonicalProjects: DEFAULT_CATEGORIES,
@@ -818,6 +831,8 @@ function buildContextPack({ query, projectSlug, ideas, projects, rules, wikiPage
     openHandoffs: openHandoffs.slice(0, 8),
     wikiPages: matchingWiki,
     projects: relevantProjects,
+    activeTodos,
+    upcomingDeadlines,
     topIdeas,
     generatedAt: new Date().toISOString(),
   };

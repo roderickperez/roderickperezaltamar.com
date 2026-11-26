@@ -322,6 +322,7 @@ module.exports = async function (req, res) {
         projectSlug: args.project_slug ? String(args.project_slug) : "",
         ideas: baseAuth.ideas,
         projects: baseAuth.projects,
+        todos: baseAuth.todos || [],
         rules: brain.rules,
         wikiPages: brain.wikiPages,
         handoffs: brain.handoffs,
