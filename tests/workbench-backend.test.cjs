@@ -107,7 +107,7 @@ test("workbench-data mints SHA-256 hashed agent token for verified owner and ret
   global.fetch = async (url, init) => {
     const u = String(url);
     if (u.includes("/auth/v1/user")) {
-      return { ok: true, json: async () => ({ id: "owner-1", email: "roderick@example.com" }) };
+      return { ok: true, json: async () => ({ id: "owner-1", email: "roderickperezaltamar@gmail.com" }) };
     }
     if (u.includes("/rest/v1/course_owners")) {
       return { ok: true, json: async () => [{ user_id: "owner-1" }] };

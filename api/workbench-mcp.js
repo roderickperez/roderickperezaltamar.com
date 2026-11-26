@@ -1,5 +1,6 @@
 const {
   appendIdeaWithAgentToken,
+  applySecurityHeaders,
   buildCalendarDeadlinesFeed,
   buildContextPack,
   buildKnowledgeGraphSummary,
@@ -250,9 +251,7 @@ function jsonRpcError(id, code, message) {
 }
 
 module.exports = async function (req, res) {
-  res.setHeader("Cache-Control", "private, no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  applySecurityHeaders(res);
 
   if (req.method === "GET") {
     return res.status(200).json({

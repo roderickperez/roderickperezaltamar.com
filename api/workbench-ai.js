@@ -1,6 +1,8 @@
 const {
   SOURCE_PLATFORMS,
+  applySecurityHeaders,
   callGeminiGenerateJson,
+  checkRateLimit,
   classifyIdeaWithServerDecisionModel,
   isSameOriginMutation,
   verifyOwnerFromCookie,
@@ -150,9 +152,12 @@ async function enrichItemsWithLinkPreviews(items) {
 }
 
 module.exports = async function (req, res) {
-  res.setHeader("Cache-Control", "private, no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  applySecurityHeaders(res);
+
+  const rl = checkRateLimit(req, { bucket: "owner-ai", maxRequests: 45, windowMs: 60_000 });
+  if (!rl.allowed) {
+    return res.status(429).json({ error: `AI rate limit exceeded. Retry in ${rl.retryAfterSec}s.` });
+  }
 
   const owner = await verifyOwnerFromCookie(req);
   if (!owner.ok) {

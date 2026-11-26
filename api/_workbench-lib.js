@@ -38,6 +38,119 @@ const SOURCE_PLATFORMS = [
 const CREATE_NEW_KEY = "__create_new_category__";
 const DECISIONS_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/decisions";
 
+const DEFAULT_OWNER_EMAILS = [
+  "roderickperezaltamar@gmail.com",
+  "roderick.perezaltamar@omv.com",
+];
+
+// In-memory sliding-window rate limiter & auth-failure lockout per IP
+const RATE_LIMIT_BUCKETS = new Map();
+const AUTH_FAIL_BUCKETS = new Map();
+
+function getClientIp(req) {
+  const xff = req && req.headers && (req.headers["x-forwarded-for"] || req.headers["X-Forwarded-For"]);
+  if (typeof xff === "string" && xff.trim()) {
+    return xff.split(",")[0].trim();
+  }
+  return (req && req.socket && req.socket.remoteAddress) || "unknown";
+}
+
+function checkRateLimit(req, { bucket = "default", maxRequests = 90, windowMs = 60_000 } = {}) {
+  const ip = getClientIp(req);
+  const key = `${bucket}:${ip}`;
+  const now = Date.now();
+  const timestamps = (RATE_LIMIT_BUCKETS.get(key) || []).filter((t) => now - t < windowMs);
+  if (timestamps.length >= maxRequests) {
+    RATE_LIMIT_BUCKETS.set(key, timestamps);
+    return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((windowMs - (now - timestamps[0])) / 1000)) };
+  }
+  timestamps.push(now);
+  RATE_LIMIT_BUCKETS.set(key, timestamps);
+  if (RATE_LIMIT_BUCKETS.size > 2000) {
+    RATE_LIMIT_BUCKETS.clear();
+  }
+  return { allowed: true, retryAfterSec: 0 };
+}
+
+function recordAuthFailure(req, { maxFailures = 8, windowMs = 10 * 60_000 } = {}) {
+  const ip = getClientIp(req);
+  const now = Date.now();
+  const fails = (AUTH_FAIL_BUCKETS.get(ip) || []).filter((t) => now - t < windowMs);
+  fails.push(now);
+  AUTH_FAIL_BUCKETS.set(ip, fails);
+  return fails.length >= maxFailures;
+}
+
+function isIpAuthLocked(req, { maxFailures = 8, windowMs = 10 * 60_000 } = {}) {
+  const ip = getClientIp(req);
+  const now = Date.now();
+  const fails = (AUTH_FAIL_BUCKETS.get(ip) || []).filter((t) => now - t < windowMs);
+  if (fails.length === 0) {
+    AUTH_FAIL_BUCKETS.delete(ip);
+    return false;
+  }
+  AUTH_FAIL_BUCKETS.set(ip, fails);
+  return fails.length >= maxFailures;
+}
+
+function resetSecurityBuckets() {
+  RATE_LIMIT_BUCKETS.clear();
+  AUTH_FAIL_BUCKETS.clear();
+}
+
+function applySecurityHeaders(res, { isHtml = false } = {}) {
+  res.setHeader("Cache-Control", "private, no-store, max-age=0, must-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  if (isHtml) {
+    // Allow Google OAuth popup flow while isolating opener context & locking down script/connect origins
+    res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+    res.setHeader(
+      "Content-Security-Policy",
+      [
+        "default-src 'self'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+        "object-src 'none'",
+        "form-action 'self'",
+        "script-src 'self' 'unsafe-inline' https://accounts.google.com https://apis.google.com",
+        "style-src 'self' 'unsafe-inline' https://accounts.google.com",
+        "img-src 'self' data: blob: https://*.googleusercontent.com https://accounts.google.com",
+        "font-src 'self' data:",
+        "frame-src https://accounts.google.com",
+        "connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://www.googleapis.com https://gmail.googleapis.com https://generativelanguage.googleapis.com https://firestore.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com",
+      ].join("; "),
+    );
+  }
+}
+
+function redactSecretsInText(value) {
+  if (typeof value !== "string" || !value) return "";
+  return value
+    .replace(/\brpa_ag_[a-f0-9]{16,128}\b/gi, "[REDACTED_WORKBENCH_TOKEN]")
+    .replace(/\bAIza[0-9A-Za-z\-_]{20,60}\b/g, "[REDACTED_GOOGLE_KEY]")
+    .replace(/\bsk-(?:proj-|live-|test-)?[0-9A-Za-z\-_]{20,120}\b/g, "[REDACTED_OPENAI_KEY]")
+    .replace(/\bgh[pousr]_[0-9A-Za-z]{20,80}\b/g, "[REDACTED_GITHUB_TOKEN]")
+    .replace(/\beyJ[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\b/g, "[REDACTED_JWT]");
+}
+
+function getAllowedOwnerEmails() {
+  const envRaw = process.env.WORKBENCH_OWNER_EMAILS || process.env.WORKBENCH_OWNER_EMAIL || "";
+  if (envRaw.trim()) {
+    return envRaw
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+  }
+  return DEFAULT_OWNER_EMAILS;
+}
+
 function readSessionToken(cookieHeader) {
   return (cookieHeader || "")
     .split(";")
@@ -53,7 +166,14 @@ function sha256Hex(secret) {
 function isSameOriginMutation(req) {
   const origin = req.headers && req.headers.origin;
   const host = req.headers && req.headers.host;
+  const secFetchSite = req.headers && (req.headers["sec-fetch-site"] || req.headers["Sec-Fetch-Site"]);
+  if (secFetchSite && String(secFetchSite).toLowerCase() === "cross-site") {
+    return false;
+  }
   if (!origin || !host) return false;
+  if (process.env.VERCEL_ENV === "production") {
+    return origin === "https://" + host;
+  }
   return origin === "https://" + host || origin === "http://" + host;
 }
 
@@ -77,6 +197,18 @@ async function verifyOwnerFromCookie(req) {
     const user = await userRes.json();
     if (!user || typeof user.id !== "string") {
       return { ok: false, status: 401, error: "Invalid user session." };
+    }
+
+    // Extra Layer: Enforce owner email allowlist whenever user.email is present
+    if (user.email) {
+      const allowedEmails = getAllowedOwnerEmails();
+      if (!allowedEmails.includes(String(user.email).trim().toLowerCase())) {
+        return {
+          ok: false,
+          status: 403,
+          error: "Access denied: email is not authorized for this private workbench.",
+        };
+      }
     }
 
     const ownerRes = await fetch(
@@ -112,8 +244,24 @@ function extractBearerToken(req) {
 }
 
 async function verifyAgentTokenAndLoad(req, requiredScope) {
+  if (isIpAuthLocked(req)) {
+    return {
+      ok: false,
+      status: 429,
+      error: "Too many failed authentication attempts. Temporarily locked for 10 minutes.",
+    };
+  }
+  const rl = checkRateLimit(req, { bucket: "agent", maxRequests: 60, windowMs: 60_000 });
+  if (!rl.allowed) {
+    return {
+      ok: false,
+      status: 429,
+      error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.`,
+    };
+  }
   const rawToken = extractBearerToken(req);
   if (!rawToken) {
+    recordAuthFailure(req);
     return { ok: false, status: 401, error: "Missing or malformed Authorization: Bearer rpa_ag_... token." };
   }
   const url = process.env.SUPABASE_URL;
@@ -141,6 +289,9 @@ async function verifyAgentTokenAndLoad(req, requiredScope) {
     }
     const payload = await rpcRes.json();
     if (!payload || payload.ok !== true) {
+      if (Number(payload && payload.status) === 401) {
+        recordAuthFailure(req);
+      }
       return {
         ok: false,
         status: Number(payload && payload.status) || 401,
@@ -197,17 +348,19 @@ function getDisplayTitle(idea) {
 function sanitizeIdeaForAgent(idea) {
   return {
     id: idea.id,
-    title: getDisplayTitle(idea),
+    title: redactSecretsInText(getDisplayTitle(idea)),
     date: idea.date,
     monthKey: idea.monthKey,
     platform: idea.platform,
     domain: idea.domain,
     stage: idea.column,
+    dueDate: idea.dueDate || null,
     primaryUrl: idea.primaryUrl || null,
     urls: Array.isArray(idea.urls) ? idea.urls.slice(0, 5) : [],
     attachments: Array.isArray(idea.attachments) ? idea.attachments : [],
-    summary: idea.aiSummary || idea.snippet || "",
-    notes: idea.notes || "",
+    summary: redactSecretsInText(idea.aiSummary || idea.snippet || ""),
+    notes: redactSecretsInText(idea.notes || ""),
+    connectionNote: redactSecretsInText(idea.aiConnectionNote || ""),
     tags: Array.isArray(idea.aiTags) ? idea.aiTags : [],
     projectId: idea.projectId || null,
     isStarred: Boolean(idea.isStarred),
@@ -843,6 +996,13 @@ module.exports = {
   DEFAULT_CATEGORIES,
   SOURCE_PLATFORMS,
   sha256Hex,
+  applySecurityHeaders,
+  checkRateLimit,
+  isIpAuthLocked,
+  recordAuthFailure,
+  resetSecurityBuckets,
+  redactSecretsInText,
+  getAllowedOwnerEmails,
   isSameOriginMutation,
   verifyOwnerFromCookie,
   extractBearerToken,

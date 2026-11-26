@@ -117,8 +117,8 @@ test("workbench-asset serves built RPA! Workbench HTML ONLY to verified course_o
     const res = createMockRes();
     await handler(req, res);
     assert.equal(res.statusCode, 200);
-    assert.equal(res.headers["cache-control"], "private, no-store");
-    assert.equal(res.headers["x-robots-tag"], "noindex, nofollow");
+    assert.ok(String(res.headers["cache-control"]).startsWith("private, no-store"));
+    assert.ok(String(res.headers["x-robots-tag"]).startsWith("noindex, nofollow"));
     assert.match(res.body.toString("utf8"), /RPA! Workbench/);
     assert.match(res.body.toString("utf8"), /\/private-workbench\/assets\//);
   } finally {

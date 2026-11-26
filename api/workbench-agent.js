@@ -1,5 +1,6 @@
 const {
   appendIdeaWithAgentToken,
+  applySecurityHeaders,
   buildCalendarDeadlinesFeed,
   buildContextPack,
   buildKnowledgeGraphSummary,
@@ -163,9 +164,7 @@ function buildOpenApiSpec(host) {
 }
 
 module.exports = async function (req, res) {
-  res.setHeader("Cache-Control", "private, no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  applySecurityHeaders(res);
 
   const route = String((req.query && req.query.route) || "").replace(/^\/+|\/+$/g, "");
 

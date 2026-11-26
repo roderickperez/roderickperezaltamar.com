@@ -1,15 +1,20 @@
 const crypto = require("crypto");
 const {
   ALLOWED_SCOPES,
+  applySecurityHeaders,
+  checkRateLimit,
   isSameOriginMutation,
   sha256Hex,
   verifyOwnerFromCookie,
 } = require("./_workbench-lib");
 
 module.exports = async function (req, res) {
-  res.setHeader("Cache-Control", "private, no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Robots-Tag", "noindex, nofollow");
+  applySecurityHeaders(res);
+
+  const rl = checkRateLimit(req, { bucket: "owner-data", maxRequests: 120, windowMs: 60_000 });
+  if (!rl.allowed) {
+    return res.status(429).json({ error: `Rate limit exceeded. Retry in ${rl.retryAfterSec}s.` });
+  }
 
   const owner = await verifyOwnerFromCookie(req);
   if (!owner.ok) {
@@ -308,8 +313,27 @@ module.exports = async function (req, res) {
       });
     }
 
-    // DELETE: Revoke an agent token immediately by ?tokenId=<uuid>
+    // DELETE: Revoke a single agent token (?tokenId=<uuid>) OR Emergency Kill Switch (?revokeAll=1)
     if (req.method === "DELETE") {
+      if (String(req.query.revokeAll || "") === "1") {
+        const revokeAllRes = await fetch(
+          `${url}/rest/v1/workbench_agent_tokens?owner_id=eq.${encodeURIComponent(userId)}&revoked_at=is.null`,
+          {
+            method: "PATCH",
+            headers: {
+              ...headers,
+              "Content-Type": "application/json",
+              Prefer: "return=minimal",
+            },
+            body: JSON.stringify({ revoked_at: new Date().toISOString() }),
+          },
+        );
+        if (!revokeAllRes.ok) {
+          return res.status(502).json({ error: "Failed to revoke all agent tokens." });
+        }
+        return res.status(200).json({ ok: true, revokedAll: true });
+      }
+
       const tokenId = typeof req.query.tokenId === "string" ? req.query.tokenId.trim() : "";
       if (!/^[0-9a-f-]{36}$/i.test(tokenId)) {
         return res.status(400).json({ error: "Valid tokenId UUID is required." });

@@ -1,5 +1,6 @@
 const fs = require("fs");
 const path = require("path");
+const { applySecurityHeaders, getAllowedOwnerEmails } = require("./_workbench-lib");
 
 const DIST_ROOT = path.resolve(__dirname, "..", "private-workbench-dist");
 
@@ -33,10 +34,15 @@ function readSessionToken(cookieHeader) {
  *   2. Membership in public.course_owners (strictly owner-only, NOT invited course learners)
  */
 module.exports = async function (req, res) {
-  res.setHeader("Cache-Control", "private, no-store");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Robots-Tag", "noindex, nofollow");
-  res.setHeader("Referrer-Policy", "no-referrer");
+  const rawPathPreview =
+    typeof req.query?.path === "string" && req.query.path.trim()
+      ? req.query.path.trim()
+      : "index.html";
+  const isHtmlPreview =
+    rawPathPreview === "index.html" ||
+    rawPathPreview.endsWith(".html") ||
+    !rawPathPreview.split("/").filter(Boolean).slice(-1)[0]?.includes(".");
+  applySecurityHeaders(res, { isHtml: isHtmlPreview });
 
   if (req.query && req.query.deny === "1") {
     return res.status(403).send("Forbidden.");
@@ -94,6 +100,14 @@ module.exports = async function (req, res) {
     const user = await userRes.json();
     if (!user || typeof user.id !== "string") {
       return res.status(401).send("Invalid session.");
+    }
+
+    // Step 1b: Enforce owner email allowlist whenever user.email is present
+    if (user.email) {
+      const allowedEmails = getAllowedOwnerEmails();
+      if (!allowedEmails.includes(String(user.email).trim().toLowerCase())) {
+        return res.status(403).send("Access denied: strictly private to the site owner.");
+      }
     }
 
     // Step 2: Strictly enforce public.course_owners membership (ONLY Roderick!)
